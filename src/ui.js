@@ -299,24 +299,44 @@
   }
 
   dlBtn.addEventListener("click", function () {
-    modelStatus.textContent = "DL中...";
-    modelStatus.className = "status-warn";
-    dlBtn.disabled = true;
-    var downloader = require("./downloader");
-    downloader
-      .downloadAll(function (ev) {
-        var p = ev.downloading ? ev.downloading.percent : 100;
-        modelStatus.textContent = "DL中... " + p + "%";
-      })
-      .then(function () {
-        checkModelStatus();
-      })
-      .catch(function (err) {
-        console.error("Download failed:", err);
-        modelStatus.textContent = "DL失敗: " + err.message;
-        modelStatus.className = "status-warn";
-        dlBtn.disabled = false;
-      });
+    // renderer で require("./downloader") が失敗する場合（https/fs 未対応）、
+    // HuggingFace のページをブラウザで開いて手動 DL を促す
+    try {
+      var downloader = require("./downloader");
+      // downloader が読めた → 自動 DL を試みる
+      modelStatus.textContent = "DL中...";
+      modelStatus.className = "status-warn";
+      dlBtn.disabled = true;
+      downloader
+        .downloadAll(function (ev) {
+          var p = ev.downloading ? ev.downloading.percent : 100;
+          modelStatus.textContent = "DL中... " + p + "%";
+        })
+        .then(function () {
+          checkModelStatus();
+        })
+        .catch(function (err) {
+          console.error("Download failed:", err);
+          modelStatus.textContent = "DL失敗: " + err.message;
+          modelStatus.className = "status-warn";
+          dlBtn.disabled = false;
+        });
+    } catch (_e) {
+      // require("./downloader") 失敗 → renderer 環境では https/fs 未対応
+      // 手動 DL の URL を表示
+      modelStatus.textContent = "手動DLが必要です";
+      modelStatus.className = "status-warn";
+      modelStatus.title = "https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx";
+      dlBtn.textContent = "DLページを開く";
+      // window.open が使えれば開く、ダメならステータスにURL表示
+      try { window.open("https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx", "_blank"); } catch (__) {}
+      setTimeout(function () {
+        dlBtn.textContent = "モデルをダウンロード";
+        if (modelStatus.textContent === "手動DLが必要です") {
+          modelStatus.textContent = "models/V1.1/ に3ファイルを配置してください";
+        }
+      }, 3000);
+    }
   });
 
   // --- NSFW warning --------------------------------------------------------
