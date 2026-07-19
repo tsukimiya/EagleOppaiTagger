@@ -40,7 +40,18 @@
 - モデル実ファイル未 DL 段階ではハッシュを推測してハードコードしない
 - `TO_BE_FILLED_*` プレースホルダーで運用。初回 DL 時に実ハッシュを出力し、ユーザーが手動で追記
 
+## PowerShell `Compress-Archive` の罠（Phase 6）
+- Windows PowerShell 5.x では `Compress-Archive -LiteralPath "path/*"` が「パスが存在しない」エラーになる（PS 7+ では動く）
+- **対策**: `Push-Location $stagePath` してから `Compress-Archive -Path "*" -DestinationPath $zip` で相対指定する
+- ファイル名のバージョン埋め込みは `manifest.json` を `ConvertFrom-Json` して `$manifest.version` を取得
+
+## 配布 zip は allowlist 方式が安全（Phase 6）
+- `node_modules/` `models/` `.git/` `.codegraph/` `.claude/` `.agents/` `.spec/` など除外対象が多数ある場合、denylist は漏れがち
+- **allowlist 方式**（含めるファイルだけ明示）なら漏れなく安全。`src/` 内のテストも `phase*-test.js` / `verify.js` で除外
+- サイズは結果的に 0.05 MB（5MB 目標）になった
+
 ## その他
 - `eagle-bridge.js` は `eagle` グローバルをトップレベルで参照せず、関数内で遅延参照（初期化タイミング問題対策）
 - `inference-client.js` は `require("fs")` をトップレベルで実行せず、関数内で遅延 require（IIFE crash 防止）
 - プラグイン更新を Eagle に反映させるにはシンボリックリンクを貼り直すのが確実
+- プロファイリングのサンプル数が少なくても「1枚あたり速度・メモリ」の DoD 検証は可能。100枚は統計的有意性と長時間安定性が目的

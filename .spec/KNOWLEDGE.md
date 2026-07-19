@@ -148,3 +148,67 @@
 - レジュームは `targetPath + ".tmp"` の既存サイズを `Range: bytes={size}-` として送信。206 なら append、200 なら overwrite、416 なら tmp を削除して再開。
 - リトライは `withRetry()` で最大 3 回、遅延は 1s / 2s / 4s の指数関数的バックオフ。
 - `src/phase5-test.js` ではネットワークを使わず、`require.cache` を使って `https` モジュールをモックし、URL 構築、Range ヘッダー、進捗コールバック、リトライ、レジュームを検証する。EventEmitter ベースの偽レスポンスに `resume()` / `pipe()` / `destroy()` を実装することで、実際のストリームを模倣。
+
+## Phase 6 — プロファイリング・配布（2026-07-20）
+
+### プロファイリング結果（3枚サンプル・ローカル CPU 推論）
+
+- 速度: 平均 **2.92 s/枚**（DoD <5s ✅）・中央値 2.89 s・p95 3.06 s
+- メモリ: ピーク RSS **1504 MB**（DoD <2.5GB ✅）・Heap 18.4 MB
+- 前処理: 59.7 ms（Jimp・問題なし）
+- 推論: 2.86 s（ONNX CPU・ボトルネック）
+
+3枚サンプルなので統計的有意性は低い。100枚バッチでの安定性検証はユーザー作業に残す。
+
+### ロングランプロファイリング（102枚・`--repeat 34`・5分連続実行）
+
+`profile.js` に `--repeat N` オプションを追加し、3枚のサンプルを34回繰り返して102枚相当の長時間実行で安定性を検証。
+
+- **処理枚数: 102 / 102（エラー0・全成功）**
+- 総時間: 4.97 min
+- 速度: 平均 **2.87 s/枚**・中央値 2.83 s・p95 3.14 s・最大 3.74 s
+- メモリ: ピーク RSS **1503.6 MB**（3枚時と同等・**リークなし**）
+- Heap 18.4 MB（安定）
+
+**結論**: 5分間の連続推論で RSS が増加していない → メモリリークなし。推論セッションのキャッシュが機能し、速度も安定。100枚バッチの「進捗バー滑らかさ」は Eagle 実機でのみ検証可能（ユーザー作業）。
+
+### 進捗バー実装のコードレビュー（代替検証）
+
+`src/ui.js` の `onProgress` コールバックを確認:
+- `ev.current/ev.total*100%` で進捗バー更新（1枚でも100枚でも同じロジック）
+- 経過時間・推定残り時間表示付き（`avg` から算出）
+- 4状態（processing / done / error / cancelled）をハンドル
+- ユーザーが「タグ付与成功・キャンセル動作」と確認済み → このコードパスは実機で動作検証済み
+
+### 回帰テスト（`npm test` + phase8/9・87+ PASS）
+
+今回の Phase 6 変更（`scripts/profile.js` の `--repeat` 追加、`make-dist.ps1` 新規、README/package.json/.gitignore 更新）が既存機能に与える影響を確認:
+
+- phase2-test: PASS（ONNX 推論・タグ変換）
+- phase3-test: PASS（Eagle 連携・キャンセル）
+- phase4-test: PASS（UI・設定永続化）
+- phase5-test: 29 PASS（ダウローダー・SHA256・レジューム・リトライ）
+- phase8-test: 36 PASS（サーバ推論クライアント・フォールバック）
+- phase9-test: 22 PASS（モック E2E）
+
+**回帰なし・87+ tests 全 PASS**
+
+### 配布 zip スクリプト（`scripts/make-dist.ps1`）
+
+- **allowlist 方式** で含めるファイルを明示（manifest/index/package*.json/README/USER-GUIDE/LICENSE/NOTICE/assets/src/server）
+- `src/` はテスト・検証を除外（`phase*-test.js` / `verify.js` / `.gitkeep`）
+- `server/` は `__pycache__` を再帰的に除外
+- バージョンは `manifest.json` から読み込み、ファイル名 `eagle-oppai-tagger-<version>.zip` を自動生成
+- **Windows PowerShell 5.x の `Compress-Archive` は `-LiteralPath "x/*"` を受け付けない** — `Push-Location` して `-Path "*"` で回避
+- 成果物: **0.05 MB (52,445 bytes)** で 5MB DoD を大幅クリア
+- `npm run dist` エイリアス追加
+
+### README 配布要件の修正
+
+- 従来「推論はすべてローカル・外部送信なし」だったが、Phase 8 のサーバ推論と矛盾
+- SPEC L724 のリスク対応「サーバ推論時は自宅サーバ前提・パブリッククラウド運用はユーザー責任」を追記
+
+### 残作業（ユーザー環境依存）
+
+- 100枚バッチでの安定性検証（統計的有意性・長時間実行・進捗バー滑らかさ）
+- クリーン環境（別ユーザー/別マシン）での配布 zip 展開 → 初回起動 → タグ付け完結検証

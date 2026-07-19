@@ -26,12 +26,13 @@ const imageDir = args[0] ? path.resolve(args[0]) : null;
 
 if (!imageDir || args.includes("--help") || args.includes("-h")) {
   console.log("Phase 6 プロファイリング");
-  console.log("  使用方法: node scripts/profile.js <画像ディレクトリ> [--model <dir>] [--warmup] [--server-url <url>]");
+  console.log("  使用方法: node scripts/profile.js <画像ディレクトリ> [--model <dir>] [--warmup] [--server-url <url>] [--repeat <N>]");
   console.log("  例:       node scripts/profile.js test-images/");
   console.log("            node scripts/profile.js test-images/ --model models/V1.1/");
   console.log("            node scripts/profile.js test-images/ --server-url http://localhost:8765");
   console.log("  --warmup  初回コールドスタートを含めずに 2 回目以降を計測");
   console.log("  --server-url <url>  推論サーバ URL（指定時はサーバ経由で推論）");
+  console.log("  --repeat <N>  画像セットを N 回繰り返して長時間安定性を検証（画像が少ない時の代替）");
   process.exit(1);
 }
 
@@ -49,6 +50,16 @@ const serverUrl = (() => {
     if (args[i] === "--server-url" && args[i + 1]) return args[i + 1];
   }
   return null;
+})();
+
+const repeat = (() => {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--repeat" && args[i + 1]) {
+      const n = parseInt(args[i + 1], 10);
+      return Number.isFinite(n) && n > 0 ? n : 1;
+    }
+  }
+  return 1;
 })();
 
 // ── 依存チェック ────────────────────────────────────────────────────────────
@@ -113,7 +124,21 @@ if (images.length === 0) {
   process.exit(1);
 }
 
-console.log(`画像数: ${images.length}`);
+// --repeat N: 同じ画像セットを N 回繰り返して長時間安定性を検証
+// ※スプレッド(...x)は関数呼び出しの引数上限（V8 で約65535）に抵触し得るため、
+//   大きな N でも落ちないよう二重ループで逐次 push する。
+const repeatedImages = [];
+for (let i = 0; i < repeat; i++) {
+  for (let j = 0; j < images.length; j++) {
+    repeatedImages.push(images[j]);
+  }
+}
+images.length = 0;
+for (let i = 0; i < repeatedImages.length; i++) {
+  images.push(repeatedImages[i]);
+}
+
+console.log(`画像数: ${images.length}${repeat > 1 ? ` (元画像 ${repeatedImages.length / repeat} 枚 × ${repeat} 回)` : ""}`);
 if (serverUrl) {
   console.log(`モード: サーバ推論 (${serverUrl})`);
 } else {
