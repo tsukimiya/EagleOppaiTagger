@@ -1,16 +1,19 @@
 /**
  * src/eagle-bridge.js
  *
- * Thin wrappers around the Eagle Plugin API used by the main loop.
- * In the Eagle renderer process `eagle` exists as a global object.
- * Tests can inject a mock by setting `global.eagle.item = { getSelected: ... }`.
- *
- * SPEC reference: .spec/SPEC.md §7.4
+ * Eagle Plugin API の薄ラッパー。
+ * eagle グローバルは renderer の初期化タイミングによって未定義の場合があるため、
+ * 関数内で遅延参照する。
  */
 "use strict";
 
+function getEagle() {
+  if (typeof eagle === "undefined") throw new Error("eagle global not available — is the plugin loaded in Eagle?");
+  return eagle;
+}
+
 async function getSelectedItems() {
-  return await eagle.item.getSelected();
+  return await getEagle().item.getSelected();
 }
 
 async function saveItem(item) {

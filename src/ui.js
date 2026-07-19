@@ -36,15 +36,20 @@
     runBtn.disabled = true;
     cancelBtn.disabled = false;
     resetProgress();
+    var diag = [];
+    try { diag.push("preprocess"); require("./preprocess"); } catch(e) { diag.push("preprocess FAIL: "+e.message); }
+    try { diag.push("inference"); require("./inference"); } catch(e) { diag.push("inference FAIL: "+e.message); }
+    try { diag.push("tags"); require("./tags"); } catch(e) { diag.push("tags FAIL: "+e.message); }
+    try { diag.push("main"); var main = require("./main"); diag.push("main OK"); } catch(e) { diag.push("main FAIL: "+e.message); }
+    progressText.textContent = diag.join(" | ");
+    if (!main) { runBtn.disabled = false; cancelBtn.disabled = true; return; }
     try {
-      var main = require("./main");
       window.EagleOppaiTagger = main.EagleOppaiTagger || { run: main.run, requestCancel: main.requestCancel };
       var settings = loadSettingsSafe();
       saveSettingsSafe(readSettingsFromUI());
       window.EagleOppaiTagger.run(onProgress);
     } catch (e) {
-      console.error("[ui] run failed:", e);
-      progressText.textContent = "エラー: " + (e.message || e);
+      progressText.textContent = "実行エラー: " + (e.message || e);
       runBtn.disabled = false;
       cancelBtn.disabled = true;
     }
