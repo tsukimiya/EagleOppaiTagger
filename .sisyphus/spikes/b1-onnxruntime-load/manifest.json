@@ -1,0 +1,12 @@
+{
+  "id": "com.eagleoppaitagger.spike-onnxruntime-load",
+  "version": "0.0.1",
+  "name": "Spike: onnxruntime-node load",
+  "logo": "",
+  "keywords": ["spike", "diagnostic"],
+  "main": {
+    "url": "index.html",
+    "width": 640,
+    "height": 480
+  }
+}

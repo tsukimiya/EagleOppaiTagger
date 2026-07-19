@@ -1,0 +1,9 @@
+{
+  "name": "spike-onnxruntime-load",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Spike: verify onnxruntime-node can be loaded inside Eagle plugin runtime",
+  "dependencies": {
+    "onnxruntime-node": "*"
+  }
+}

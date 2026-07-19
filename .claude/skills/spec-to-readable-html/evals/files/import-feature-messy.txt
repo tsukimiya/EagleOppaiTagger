@@ -1,0 +1,44 @@
+FEATURE: CSV Import for the Inventory tool  (notes dump - cleanup needed!!)
+
+ok so the gist is warehouse managers want to bulk-update stock by uploading a
+csv instead of editing rows one by one. right now everything is manual and it
+takes forever, like one manager said she spends 2 hrs every monday morning.
+
+requirements as i understand them from the kickoff:
+- user uploads a .csv (UTF-8). max file size 10MB. we MUST reject anything bigger
+  with a clear error.
+- columns expected: sku, quantity, warehouse_code, (optional) note
+- sku must already exist in the system. if a sku in the file doesn't exist we
+  should... skip it? or fail the whole import? -- this was debated, no decision.
+- quantity is an integer >= 0. negative = reject that row.
+- after upload we show a PREVIEW of what will change before committing. user has
+  to click "Apply" to actually write. (this is a MUST, legal wants an audit trail)
+- on apply, we record who imported what and when. audit log entry per import batch.
+
+Adel from data mentioned the file might have a BOM and excel adds weird quoting,
+so the parser needs to be tolerant. also some customers use semicolons as
+separators (european excel) -- do we support that? unclear.
+
+non functional-ish stuff:
+- import of 50k rows should finish in under 30s
+- if the import crashes halfway it MUST NOT leave partial data. all-or-nothing,
+  wrap it in a transaction.
+- duplicate sku rows in the same file: last one wins? sum them? NOT DECIDED.
+
+the flow is basically: upload -> we parse & validate -> show preview w/ counts
+(X rows will update, Y rows have errors) -> user reviews errors, can download an
+error report csv -> user clicks Apply -> we commit in a txn -> show success summary
+with a link to the audit entry.
+
+error report should list row number + the specific reason. Priorities: the
+preview + apply + audit log are all must-have for v1. the error report download
+is a should-have. semicolon support + a scheduled/automatic import are nice to
+have, maybe later.
+
+oh also - permissions. only users with the "inventory_admin" role can import.
+everyone else gets a 403. and we rate limit to like... 5 imports per hour per
+user? (made that number up, confirm with the team)
+
+API surface is roughly POST /api/inventory/imports (multipart) returns a preview
+with an import_id, then POST /api/inventory/imports/{import_id}/apply to commit.
+GET /api/inventory/imports/{import_id}/errors.csv for the error report.

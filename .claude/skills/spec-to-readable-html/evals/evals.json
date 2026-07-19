@@ -1,0 +1,23 @@
+{
+  "skill_name": "spec-to-readable-html",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "この通知センターのPRD、長くて構造が頭に入ってこないんだよね。読みやすいHTMLのレポートにしてくれない? evals/files/notify-prd-ja.md です。",
+      "expected_output": "A single self-contained dark-theme HTML report in Japanese (matching the source language). Includes a sticky TOC, summary cards, a requirements table with Must/Should/Could badges preserving original keywords, at least one Mermaid diagram for the delivery flow, and an Open Questions section capturing the WebSocket-vs-60s-delay contradiction and the unconfirmed mobile-rollout point. API paths and error codes preserved verbatim.",
+      "files": ["evals/files/notify-prd-ja.md"]
+    },
+    {
+      "id": 1,
+      "prompt": "Turn evals/files/payments-design-en.md into an HTML report I can skim and share with reviewers. I want to actually see the charge flow and the data model, not just read paragraphs.",
+      "expected_output": "A single self-contained dark-theme HTML report in English with a sticky TOC and summary cards. Contains a Mermaid sequence diagram for the charge flow, an ER diagram for the Merchant/Charge/Refund/PaymentMethod data model, and a state diagram for the charge lifecycle. The public API table and error codes are preserved verbatim; MUST keywords kept. Open items (capture-later SLA, partial capture) surfaced in an Open Questions section.",
+      "files": ["evals/files/payments-design-en.md"]
+    },
+    {
+      "id": 2,
+      "prompt": "I've got this messy notes dump for a CSV import feature — it's all over the place. Can you clean it up into something readable I can review? evals/files/import-feature-messy.txt",
+      "expected_output": "A single self-contained dark-theme HTML report that restructures the messy notes into clear sections (summary, requirements with priority badges, flow diagram, open questions). The many undecided points (skip-vs-fail unknown SKUs, semicolon support, duplicate-row handling, rate-limit number) are collected into an Open Questions section rather than guessed. Any content the model inferred or normalized is marked with an Inferred badge. The upload→preview→apply flow is shown as a Mermaid flowchart. API paths preserved verbatim.",
+      "files": ["evals/files/import-feature-messy.txt"]
+    }
+  ]
+}

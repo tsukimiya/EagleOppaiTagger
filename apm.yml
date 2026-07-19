@@ -1,0 +1,10 @@
+name: EagleOppaiTagger
+version: 1.0.0
+description: APM project for EagleOppaiTagger
+author: tsukimiya
+dependencies:
+  apm:
+  - tsukimiya/agent-skills
+  mcp: []
+includes: auto
+scripts: {}
