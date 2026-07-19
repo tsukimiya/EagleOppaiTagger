@@ -97,8 +97,8 @@
   - Range リクエストでレジューム対応
   - リトライ（最大3回・exponential backoff）
   - `onprogress` コールバック
-- [ ] ブラックリスト入力 UI と probsToTags への統合
-- [ ] `README.md`（配布用）に以下を明記:
+- [x] ブラックリスト入力 UI と probsToTags への統合
+- [x] `README.md`（配布用）に以下を明記:
   - 前提 Eagle バージョン
   - 初回 DL サイズと所要時間目安
   - NSFW タグ含有の告知
@@ -110,14 +110,14 @@
 
 ## Phase 6: プロファイリング・配布
 
-- [ ] 100枚バッチで計測スクリプト実行:
+- [x] 100枚バッチで計測スクリプト実行:
   - 1枚あたり wall-clock（平均・中央値・p95）
   - `process.memoryUsage()` の rss / heapUsed ピーク
-- [ ] 目標値に対するギャップ分析（必要なら最適化）
-- [ ] `git archive` or 手動で配布 zip 作成（`models/` / `node_modules/` 除外）
+- [x] 目標値に対するギャップ分析（必要なら最適化）
+- [x] `git archive` or 手動で配布 zip 作成（`models/` / `node_modules/` 除外）
 - [ ] クリーン環境（別マシン or 別ユーザー）で展開 → 初回起動 → タグ付けまで完結するか検証
-- [ ] **DoD**: 1枚5秒以内 / ピーク 2.5 GB 以下 / クリーン環境で完結
-- [ ] **DoD**: 配布 zip が 5 MB 以下
+- [ ] **DoD**: 1枚5秒以内 / ピーク 2.5 GB 以下 / クリーン環境で完結（速度・メモリは検証済・クリーン環境検証が残り）
+- [x] **DoD**: 配布 zip が 5 MB 以下
 
 ---
 

@@ -27,3 +27,6 @@ __pycache__/
 
 # Verifier outputs (regenerate via `python export_tensors.py`)
 scripts/python-ref/expected_*.json
+
+# Profiling report (regenerate via `npm run profile`)
+scripts/profile-report.json
