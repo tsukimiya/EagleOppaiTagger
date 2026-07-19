@@ -8,7 +8,7 @@
     "test:preprocess": "node src/verify.js",
     "check": "node -e \"const fs=require('fs'),cp=require('child_process');(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(p.endsWith('.js')){cp.execSync('node --check \\\"'+p+'\\\"',{stdio:'inherit'})}}})('src')\"",
     "profile": "node scripts/profile.js",
-    "dist": "pwsh -NoProfile -File scripts/make-dist.ps1"
+    "dist": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-dist.ps1"
   },
   "dependencies": {
     "jimp": "0.22.12",

@@ -9,13 +9,14 @@
   - server/__pycache__ を除外
   - 出力: dist/eagle-oppai-tagger-<version>.zip
   - 5MB 超過時は警告（Phase 6 DoD 違反）
+  - Windows PowerShell 5.x / PowerShell 7+ 両対応
 
 .PARAMETER OutDir
   zip の出力先ディレクトリ。デフォルト: dist/
 
 .EXAMPLE
-  pwsh scripts/make-dist.ps1
-  pwsh scripts/make-dist.ps1 -OutDir C:\releases
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-dist.ps1
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-dist.ps1 -OutDir C:\releases
 #>
 [CmdletBinding()]
 param(
@@ -23,13 +24,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
+# ※ Set-StrictMode は PS 5.x と PS 7 で解釈が違うため使用しない。
+#    実行時エラーは ErrorActionPreference で捕捉する。
 
-$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-Set-Location $Root
+# PS 5.x の Join-Path が一部ケースで $null を返す問題（原因不明）を回避するため、
+# .NET API でラップする。PS 5.x / 7 両方で同一動作する。
+function JoinPath([string]$parent, [string]$child) {
+  return [System.IO.Path]::Combine($parent, $child)
+}
+
+# リポジトリルートへ移動（PS 5.x / 7 両方で確実）。
+Set-Location (JoinPath $PSScriptRoot "..")
+$Root = (Get-Location).Path
 
 # ── バージョン読み込み ───────────────────────────────────────────────
-$manifestPath = Join-Path $Root "manifest.json"
+$manifestPath = JoinPath $Root "manifest.json"
 if (-not (Test-Path -LiteralPath $manifestPath)) {
   throw "manifest.json が見つかりません: $manifestPath"
 }
@@ -42,9 +51,9 @@ $zipName = "$pluginName-$version.zip"
 $stageName = "$pluginName-$version"
 
 # ── パス設定 ─────────────────────────────────────────────────────────
-$OutDir = (New-Item -ItemType Directory -Force -Path (Join-Path $Root $OutDir)).FullName
-$stagePath = Join-Path $OutDir $stageName
-$zipPath = Join-Path $OutDir $zipName
+$outDirFull = (New-Item -ItemType Directory -Force -Path (JoinPath $Root $OutDir)).FullName
+$stagePath = JoinPath $outDirFull $stageName
+$zipPath = JoinPath $outDirFull $zipName
 
 # 既存成果物をクリーンアップ
 if (Test-Path -LiteralPath $stagePath) { Remove-Item -LiteralPath $stagePath -Recurse -Force }
@@ -69,7 +78,7 @@ $includeFiles = @(
 )
 
 foreach ($file in $includeFiles) {
-  $src = Join-Path $Root $file
+  $src = JoinPath $Root $file
   if (-not (Test-Path -LiteralPath $src)) {
     Write-Warning "skip (not found): $file"
     continue
@@ -81,15 +90,15 @@ foreach ($file in $includeFiles) {
 # ── 含めるディレクトリ ──────────────────────────────────────────────
 
 # assets/（ロゴ等。manifest.json が参照）
-$assetsSrc = Join-Path $Root "assets"
+$assetsSrc = JoinPath $Root "assets"
 if (Test-Path -LiteralPath $assetsSrc) {
   Copy-Item -LiteralPath $assetsSrc -Destination $stagePath -Recurse
   Write-Host "  + assets/"
 }
 
 # src/（テスト・verify を除外）
-$srcSrc = Join-Path $Root "src"
-$srcDst = Join-Path $stagePath "src"
+$srcSrc = JoinPath $Root "src"
+$srcDst = JoinPath $stagePath "src"
 New-Item -ItemType Directory -Force -Path $srcDst | Out-Null
 
 $srcExcludePatterns = @(
@@ -110,9 +119,9 @@ Get-ChildItem -LiteralPath $srcSrc -File | Where-Object {
 }
 
 # server/（Python FastAPI サーバ・__pycache__ 除外）
-$serverSrc = Join-Path $Root "server"
+$serverSrc = JoinPath $Root "server"
 if (Test-Path -LiteralPath $serverSrc) {
-  $serverDst = Join-Path $stagePath "server"
+  $serverDst = JoinPath $stagePath "server"
   New-Item -ItemType Directory -Force -Path $serverDst | Out-Null
 
   # サブディレクトリ構成を保ってコピー（__pycache__ を除外）
@@ -123,7 +132,7 @@ if (Test-Path -LiteralPath $serverSrc) {
     Get-ChildItem -LiteralPath $src | ForEach-Object {
       if ($_.PSIsContainer) {
         if ($excludeDirNames -contains $_.Name) { return }
-        Copy-ServerDir -src $_.FullName -dst (Join-Path $dst $_.Name)
+        Copy-ServerDir -src $_.FullName -dst (JoinPath $dst $_.Name)
       } else {
         Copy-Item -LiteralPath $_.FullName -Destination $dst
       }
@@ -137,7 +146,7 @@ if (Test-Path -LiteralPath $serverSrc) {
 Write-Host ""
 
 # ── zip 作成 ─────────────────────────────────────────────────────────
-# Compress-Archive は Windows PowerShell 5.x で Join-Path "x" "*" を受け付けないため、
+# Compress-Archive は Windows PowerShell 5.x で -LiteralPath "x/*" を受け付けないため、
 # カレントディレクトリをステージに切り替えて相対パスで圧縮する。
 Push-Location $stagePath
 try {

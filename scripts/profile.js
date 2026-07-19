@@ -32,7 +32,7 @@ if (!imageDir || args.includes("--help") || args.includes("-h")) {
   console.log("            node scripts/profile.js test-images/ --server-url http://localhost:8765");
   console.log("  --warmup  初回コールドスタートを含めずに 2 回目以降を計測");
   console.log("  --server-url <url>  推論サーバ URL（指定時はサーバ経由で推論）");
-  console.log("  --repeat <N>  画像セットを N 回繰り返して長時間安定性を検証（画像少な時の代替）");
+  console.log("  --repeat <N>  画像セットを N 回繰り返して長時間安定性を検証（画像が少ない時の代替）");
   process.exit(1);
 }
 
@@ -125,12 +125,18 @@ if (images.length === 0) {
 }
 
 // --repeat N: 同じ画像セットを N 回繰り返して長時間安定性を検証
+// ※スプレッド(...x)は関数呼び出しの引数上限（V8 で約65535）に抵触し得るため、
+//   大きな N でも落ちないよう二重ループで逐次 push する。
 const repeatedImages = [];
 for (let i = 0; i < repeat; i++) {
-  repeatedImages.push(...images);
+  for (let j = 0; j < images.length; j++) {
+    repeatedImages.push(images[j]);
+  }
 }
 images.length = 0;
-images.push(...repeatedImages);
+for (let i = 0; i < repeatedImages.length; i++) {
+  images.push(repeatedImages[i]);
+}
 
 console.log(`画像数: ${images.length}${repeat > 1 ? ` (元画像 ${repeatedImages.length / repeat} 枚 × ${repeat} 回)` : ""}`);
 if (serverUrl) {
