@@ -182,7 +182,8 @@ function testUiLoadsInMockDom() {
       textContent: "",
       innerHTML: "",
       className: "",
-      style: { width: "", display: "" },
+      title: "",
+      style: { width: "", display: "", setProperty: function() {}, removeProperty: function() {} },
       checked: false,
       disabled: false,
       classList: {
@@ -192,6 +193,8 @@ function testUiLoadsInMockDom() {
         contains(c) { return this._classes.has(c); },
       },
       addEventListener: function () { /* noop */ },
+      removeAttribute: function () { /* noop */ },
+      setAttribute: function () { /* noop */ },
     };
   }
 

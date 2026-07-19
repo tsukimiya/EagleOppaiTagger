@@ -16,8 +16,11 @@
  */
 "use strict";
 
-const fs = require("fs");
-const path = require("path");
+// fs/path は renderer で使えないため、関数内で遅延 require
+let _fs = null;
+let _path = null;
+function getFs() { if (!_fs) _fs = require("fs"); return _fs; }
+function getPath() { if (!_path) _path = require("path"); return _path; }
 
 /**
  * 画像ファイルを推論サーバに送信し、確率配列を取得する。
@@ -30,8 +33,8 @@ const path = require("path");
  */
 async function inferRemote(filePath, { serverUrl, timeoutMs = 10000 }) {
   if (!serverUrl) throw new Error("serverUrl is required");
-
-  // 1. ファイル読み込み
+  const fs = getFs();
+  const path = getPath();
   const buffer = fs.readFileSync(filePath);
   const fileName = path.basename(filePath);
 
