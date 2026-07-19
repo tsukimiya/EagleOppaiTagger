@@ -67,7 +67,7 @@
     <h2>OppaiOracle Tagger</h2>
     <div class="row">
       <span>モデル状態:</span>
-      <span id="model-status" class="status-warn">未確認</span>
+      <span id="model-status" class="status-warn">未ダウンロード</span>
       <button id="dl-btn" class="dl" onclick="document.getElementById('model-status').textContent='手動DL: huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx';try{window.open('https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx','_blank')}catch(_){};setTimeout(function(){document.getElementById('model-status').textContent='models/V1.1/ に3ファイルを配置してください'},3000)">モデルをダウンロード</button>
     </div>
   </section>
@@ -143,5 +143,19 @@
   <script src="src/settings.js"></script>
   <script src="src/main.js"></script>
   <script src="src/ui.js"></script>
+  <!-- モデル存在確認（ui.js の checkModelStatus が renderer で動かない場合のフォールバック） -->
+  <script>
+    try {
+      var fs = require("fs");
+      var path = require("path");
+      var mp = path.join(__dirname || ".", "..", "models", "V1.1", "model.onnx");
+      if (fs.existsSync(mp)) {
+        var st = document.getElementById("model-status");
+        if (st) { st.textContent = "DL済み"; st.className = "status-ok"; }
+        var db = document.getElementById("dl-btn");
+        if (db) db.style.display = "none";
+      }
+    } catch(_) { /* renderer で fs 未対応なら何もしない */ }
+  </script>
 </body>
 </html>
