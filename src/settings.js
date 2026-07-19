@@ -15,6 +15,11 @@ const DEFAULTS = {
   maxTags: 30,
   mergeStrategy: "append",
   blacklist: [],
+  // Phase 8: server inference settings
+  useServer: false,
+  serverUrl: "",
+  serverTimeoutMs: 10000,
+  fallbackOnError: true,
 };
 
 // In a plain Node test environment `localStorage` does not exist; provide a

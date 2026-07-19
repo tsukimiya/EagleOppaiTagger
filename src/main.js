@@ -15,6 +15,7 @@
 
 const { preprocess } = require("./preprocess");
 const { infer } = require("./inference");
+const { inferRemote } = require("./inference-client");
 const { probsToTags } = require("./tags");
 const { loadSettings } = require("./settings");
 const { getSelectedItems, saveItem } = require("./eagle-bridge");
@@ -35,6 +36,34 @@ function mergeTags(existing, predicted, strategy) {
     default:
       return [...new Set([...existing, ...predicted])];
   }
+}
+
+/**
+ * 推論ルーティング（Phase 8）。
+ * サーバ優先 → フォールバック → ローカル。
+ *
+ * @param {{ filePath: string }} item
+ * @param {object} settings
+ * @returns {Promise<{ probs: Float32Array, source: string }>}
+ */
+async function inferDispatch(item, settings) {
+  if (settings.useServer && settings.serverUrl) {
+    try {
+      const probs = await inferRemote(item.filePath, {
+        serverUrl: settings.serverUrl,
+        timeoutMs: settings.serverTimeoutMs,
+      });
+      return { probs, source: "server" };
+    } catch (err) {
+      if (!settings.fallbackOnError) throw err;
+      const pre = await preprocess(item.filePath);
+      const probs = await infer(pre);
+      return { probs, source: "fallback" };
+    }
+  }
+  const pre = await preprocess(item.filePath);
+  const probs = await infer(pre);
+  return { probs, source: "local" };
 }
 
 async function run(onProgress) {
@@ -64,8 +93,7 @@ async function run(onProgress) {
         });
       }
 
-      const pre = await preprocess(item.filePath);
-      const probs = await infer(pre);
+      const { probs, source } = await inferDispatch(item, settings);
       const predicted = probsToTags(probs, {
         threshold: settings.threshold,
         maxTags: settings.maxTags,
@@ -82,6 +110,7 @@ async function run(onProgress) {
           fileName: item.name,
           status: "done",
           tags: predicted,
+          source,
         });
       }
     } catch (err) {
@@ -104,4 +133,4 @@ if (typeof window !== "undefined") {
   window.EagleOppaiTagger = { run, requestCancel, mergeTags };
 }
 
-module.exports = { run, requestCancel, mergeTags };
+module.exports = { run, requestCancel, mergeTags, inferDispatch };

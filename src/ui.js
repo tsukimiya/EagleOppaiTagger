@@ -15,6 +15,7 @@
   var loadSettings = settingsModule.loadSettings;
   var saveSettings = settingsModule.saveSettings;
   var DEFAULTS = settingsModule.DEFAULTS;
+  var inferenceClient = require("./inference-client");
 
   // --- DOM references ------------------------------------------------------
   var runBtn = document.getElementById("run-btn");
@@ -36,6 +37,13 @@
   var nsfwOverlay = document.getElementById("nsfw-warning");
   var nsfwDismiss = document.getElementById("nsfw-dismiss");
   var nsfwOk = document.getElementById("nsfw-ok");
+
+  // Phase 8: server settings DOM
+  var useServerCheckbox = document.getElementById("use-server");
+  var serverUrlInput = document.getElementById("server-url");
+  var serverTestBtn = document.getElementById("server-test-btn");
+  var fallbackOnErrorCheckbox = document.getElementById("fallback-on-error");
+  var serverStatusEl = document.getElementById("server-status");
 
   // --- Constants -----------------------------------------------------------
   var NSFW_KEY = "eagle-oppai-tagger:nsfw-dismissed";
@@ -59,6 +67,12 @@
     for (var i = 0; i < mergeRadios.length; i++) {
       mergeRadios[i].checked = mergeRadios[i].value === settings.mergeStrategy;
     }
+
+    // Phase 8: server settings
+    useServerCheckbox.checked = !!settings.useServer;
+    serverUrlInput.value = settings.serverUrl || "";
+    fallbackOnErrorCheckbox.checked = settings.fallbackOnError !== false;
+    updateServerUIState();
   }
 
   function readSettingsFromUI() {
@@ -88,6 +102,11 @@
       maxTags: maxTags,
       mergeStrategy: mergeStrategy,
       blacklist: blacklist,
+      // Phase 8: server settings
+      useServer: useServerCheckbox.checked,
+      serverUrl: serverUrlInput.value.trim(),
+      serverTimeoutMs: DEFAULTS.serverTimeoutMs,
+      fallbackOnError: fallbackOnErrorCheckbox.checked,
     };
   }
 
@@ -95,7 +114,41 @@
     settings = readSettingsFromUI();
     saveSettings(settings);
     thresholdVal.textContent = settings.threshold.toFixed(2);
+    updateServerUIState();
   }
+
+  // --- Phase 8: Server UI helpers ------------------------------------------
+
+  function updateServerUIState() {
+    var enabled = useServerCheckbox.checked;
+    serverUrlInput.disabled = !enabled;
+    serverTestBtn.disabled = !enabled || !serverUrlInput.value.trim();
+  }
+
+  serverTestBtn.addEventListener("click", function () {
+    var url = serverUrlInput.value.trim();
+    if (!url) return;
+    serverStatusEl.textContent = "接続中...";
+    serverStatusEl.style.color = "#aaa";
+    serverTestBtn.disabled = true;
+    inferenceClient.checkHealth(url).then(function (result) {
+      if (result.ok) {
+        serverStatusEl.textContent = "OK: " + (result.info && result.info.model_info ? result.info.model_info.model_name || "server" : "server");
+        serverStatusEl.style.color = "#4a7";
+      } else {
+        serverStatusEl.textContent = "NG: " + (result.error || "unknown");
+        serverStatusEl.style.color = "#ca4";
+      }
+      serverTestBtn.disabled = false;
+    });
+  });
+
+  useServerCheckbox.addEventListener("change", onSettingsChanged);
+  serverUrlInput.addEventListener("input", function () {
+    updateServerUIState();
+    onSettingsChanged();
+  });
+  fallbackOnErrorCheckbox.addEventListener("change", onSettingsChanged);
 
   // --- Progress helpers ----------------------------------------------------
 

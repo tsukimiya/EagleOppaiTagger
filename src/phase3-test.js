@@ -65,6 +65,10 @@ async function testSettings() {
     maxTags: 10,
     mergeStrategy: "overwrite",
     blacklist: ["foo", "bar"],
+    useServer: false,
+    serverUrl: "",
+    serverTimeoutMs: 10000,
+    fallbackOnError: true,
   };
 
   saveSettings(custom);
