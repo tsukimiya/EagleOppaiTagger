@@ -96,6 +96,19 @@
     <div class="row">
       <input type="text" id="blacklist" placeholder="カンマ区切りで入力 (例: tag1, tag2)">
     </div>
+    <!-- サーバ設定（Phase 8 追加） -->
+    <div class="row" style="margin-top:8px;border-top:1px solid #555;padding-top:8px">
+      <label><input type="checkbox" id="use-server"> サーバ推論を使用</label>
+    </div>
+    <div class="row">
+      <label for="server-url">サーバ URL:</label>
+      <input type="text" id="server-url" placeholder="http://192.168.1.10:8765" style="flex:1" disabled>
+      <button id="server-test-btn" type="button" style="padding:2px 8px" disabled>接続テスト</button>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="fallback-on-error" checked> サーバ失敗時にローカルフォールバック</label>
+    </div>
+    <div id="server-status" style="font-size:11px;color:#aaa;margin-left:8px"></div>
   </section>
 
   <!-- 3. Action area -->

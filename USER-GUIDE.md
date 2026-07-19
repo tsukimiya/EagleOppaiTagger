@@ -142,6 +142,68 @@ node scripts/profile.js test-images\ --warmup
 
 ---
 
+## F. 実環境検証（Phase 9b）
+
+### F-1. 推論サーバの起動
+
+自宅サーバ（Linux + GPU）で:
+
+```bash
+cd server
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+# モデル配置（HuggingFace から DL）
+mkdir -p models/V1.1
+# model.onnx, selected_tags.csv, preprocessing.json, pr_thresholds.json を配置
+uvicorn main:app --host 0.0.0.0 --port 8765
+```
+
+### F-2. GPU 認識確認
+
+```bash
+curl http://<server-ip>:8765/info
+# providers に "CUDAExecutionProvider" が含まれていれば GPU 使用中
+```
+
+### F-3. プラグイン側設定
+
+Eagle プラグイン内で:
+1. 「サーバ推論を使用」にチェック
+2. サーバ URL に `http://<server-ip>:8765` を入力
+3. 「接続テスト」をクリック → ステータスが「ok」になることを確認
+4. 「サーバ失敗時にローカルフォールバック」は ON 推奨
+
+### F-4. 推論テスト
+
+1. Eagle で画像を選択
+2. プラグイン内で「実行」をクリック
+3. 進捗バーが動き、完了サマリが表示されることを確認
+4. Eagle 上でタグが付与されていることを確認
+
+### F-5. プロファイリング（サーバ vs ローカル）
+
+```powershell
+# ローカル推論
+node scripts/profile.js test-images\ --warmup
+
+# サーバ推論
+node scripts/profile.js test-images\ --server-url http://<server-ip>:8765 --warmup
+```
+
+結果を比較:
+- `scripts/profile-report.json` に詳細が保存される
+- サーバ推論の方が高速（GPU 次第で 10〜100 倍）
+- メモリ使用量はサーバ推論の方が少ない（モデルがサーバ側にあるため）
+
+### F-6. フォールバック動作確認
+
+1. サーバを停止
+2. Eagle プラグインで「実行」をクリック
+3. ローカル推論に自動切替されることを確認（進捗バーに「fallback」表示）
+
+---
+
 ## 異常時のエスカレーション
 
 | 現象 | エスカレーション先 |

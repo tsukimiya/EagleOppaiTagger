@@ -200,6 +200,9 @@ function testUiLoadsInMockDom() {
     "summary-section", "summary", "threshold", "threshold-val",
     "max-tags", "blacklist", "model-status", "dl-btn",
     "nsfw-warning", "nsfw-dismiss", "nsfw-ok",
+    // Phase 8: server settings
+    "use-server", "server-url", "server-test-btn",
+    "fallback-on-error", "server-status",
   ];
   for (const id of ids) {
     elements[id] = makeEl(id);

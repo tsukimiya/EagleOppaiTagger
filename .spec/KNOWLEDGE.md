@@ -105,6 +105,24 @@
 - **影響**: `npm audit` で moderate 4件（jimp/@jimp/custom/@jimp/core/file-type）が残存。実害ほぼなし
 - **見直し条件**: Electron が Node 18+ に上がったら jimp v1 移行を再検討
 
+### ADR-10: サーバ優先・ローカルフォールバックの二段構え採用
+
+- **Context**: GPU 推論による高速化と Mac/Linux 対応を見据え、ローカル推論専用からサーバ + ローカルの二段構えに変更
+- **Decision**:
+  - サーバ（Python FastAPI + onnxruntime-gpu）を第一優先
+  - onnxruntime-node ローカル推論（ADR-1）をフォールバックとして維持
+  - プロトコルは REST (multipart + JSON)
+  - 配置は自宅サーバ（VPN 含む）前提
+- **根拠**:
+  - onnxruntime-node は CPU プロバイダのみ → GPU 活用には Python 側が必要
+  - フォールバック維持でサーバ停止時も最低限動作
+  - 自宅 LAN 内で NSFW 画像がインターネットに出ない前提を維持
+- **影響**:
+  - B1 スパイク・Phase 2 inference.js・Phase 5 downloader.js はフォールバック経路として維持（廃止しない）
+  - モデル DL は両側で必要（サーバは `server/` に配置・プラグイン側はフォールバック時に DL）
+  - 配布サイズは変更なし（フォールバック維持のため）
+  - ADR-1（onnxruntime-node 採用）は維持・補完される形（置換ではない）
+
 ---
 
 ## v1 plan 敵対的検証の主要知見

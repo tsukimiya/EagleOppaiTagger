@@ -26,10 +26,12 @@ const imageDir = args[0] ? path.resolve(args[0]) : null;
 
 if (!imageDir || args.includes("--help") || args.includes("-h")) {
   console.log("Phase 6 プロファイリング");
-  console.log("  使用方法: node scripts/profile.js <画像ディレクトリ> [--model <dir>] [--warmup]");
+  console.log("  使用方法: node scripts/profile.js <画像ディレクトリ> [--model <dir>] [--warmup] [--server-url <url>]");
   console.log("  例:       node scripts/profile.js test-images/");
   console.log("            node scripts/profile.js test-images/ --model models/V1.1/");
+  console.log("            node scripts/profile.js test-images/ --server-url http://localhost:8765");
   console.log("  --warmup  初回コールドスタートを含めずに 2 回目以降を計測");
+  console.log("  --server-url <url>  推論サーバ URL（指定時はサーバ経由で推論）");
   process.exit(1);
 }
 
@@ -42,20 +44,30 @@ const modelDir = (() => {
 
 const warmup = args.includes("--warmup");
 
+const serverUrl = (() => {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--server-url" && args[i + 1]) return args[i + 1];
+  }
+  return null;
+})();
+
 // ── 依存チェック ────────────────────────────────────────────────────────────
 
 const modelOnnx = path.join(modelDir, "model.onnx");
 const tagsCsv = path.join(modelDir, "selected_tags.csv");
 
-if (!fs.existsSync(modelOnnx)) {
-  console.error(`モデルが見つかりません: ${modelOnnx}`);
-  console.error(`  ダウンロード: https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx`);
-  console.error(`  --model で別ディレクトリを指定できます`);
-  process.exit(1);
-}
-if (!fs.existsSync(tagsCsv)) {
-  console.error(`selected_tags.csv が見つかりません: ${tagsCsv}`);
-  process.exit(1);
+if (!serverUrl) {
+  // ローカル推論時のみモデルファイルが必要
+  if (!fs.existsSync(modelOnnx)) {
+    console.error(`モデルが見つかりません: ${modelOnnx}`);
+    console.error(`  ダウンロード: https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx`);
+    console.error(`  --model で別ディレクトリを指定できます`);
+    process.exit(1);
+  }
+  if (!fs.existsSync(tagsCsv)) {
+    console.error(`selected_tags.csv が見つかりません: ${tagsCsv}`);
+    process.exit(1);
+  }
 }
 
 // ダウンローダーで DL していない場合は models/ のパスを設定
@@ -102,7 +114,12 @@ if (images.length === 0) {
 }
 
 console.log(`画像数: ${images.length}`);
-console.log(`モデル: ${modelDir}`);
+if (serverUrl) {
+  console.log(`モード: サーバ推論 (${serverUrl})`);
+} else {
+  console.log(`モード: ローカル推論`);
+  console.log(`モデル: ${modelDir}`);
+}
 console.log(`warmup: ${warmup}`);
 console.log("");
 
@@ -132,13 +149,35 @@ function memUsage() {
 
 // ── プロファイリング実行 ────────────────────────────────────────────────────
 
-async function profileOne(filePath, label) {
+async function profileOne(filePath, label, srvUrl) {
   const memBefore = memUsage();
   const t0 = Date.now();
 
+  let probs;
+  let source = "local";
+  if (srvUrl) {
+    const { inferRemote } = require(path.join(ROOT, "src", "inference-client"));
+    probs = await inferRemote(filePath, { serverUrl: srvUrl, timeoutMs: 30000 });
+    source = "server";
+    const t2 = Date.now();
+    const memAfter = memUsage();
+    return {
+      file: label || path.basename(filePath),
+      preprocessMs: 0,
+      inferenceMs: t2 - t0,
+      totalMs: t2 - t0,
+      rssBefore: memBefore.rss,
+      rssAfter: memAfter.rss,
+      heapBefore: memBefore.heapUsed,
+      heapAfter: memAfter.heapUsed,
+      numProbabilities: probs.length,
+      source,
+    };
+  }
+
   const pre = await preprocess(filePath);
   const t1 = Date.now();
-  const probs = await inference.infer(pre);
+  probs = await inference.infer(pre);
   const t2 = Date.now();
 
   const settings = { threshold: 0.5, maxTags: 30, blacklist: new Set() };
@@ -154,6 +193,7 @@ async function profileOne(filePath, label) {
     heapBefore: memBefore.heapUsed,
     heapAfter: memAfter.heapUsed,
     numProbabilities: probs.length,
+    source,
   };
 }
 
@@ -164,7 +204,7 @@ async function main() {
   // ウォームアップ（モデルロード含む初回は除く）
   if (warmup && images.length > 0) {
     process.stdout.write("ウォームアップ中... ");
-    await profileOne(images[0], "warmup");
+    await profileOne(images[0], "warmup", serverUrl);
     // inference session がキャッシュされたので、次の run は純粋な推論計測
     console.log("完了\n");
   }
@@ -174,9 +214,13 @@ async function main() {
   for (let i = 0; i < images.length; i++) {
     process.stdout.write(`  [${String(i + 1).padStart(3, " ")}/${images.length}] ${path.basename(images[i])} ... `);
     try {
-      const r = await profileOne(images[i]);
+      const r = await profileOne(images[i], null, serverUrl);
       results.push(r);
-      console.log(`${formatTime(r.totalMs)}  (pre:${formatTime(r.preprocessMs)} inf:${formatTime(r.inferenceMs)})`);
+      if (serverUrl) {
+        console.log(`${formatTime(r.totalMs)}  (server)`);
+      } else {
+        console.log(`${formatTime(r.totalMs)}  (pre:${formatTime(r.preprocessMs)} inf:${formatTime(r.inferenceMs)})`);
+      }
     } catch (err) {
       console.error(`エラー: ${err.message}`);
       results.push({ file: path.basename(images[i]), error: err.message });
@@ -221,8 +265,12 @@ async function main() {
   console.log(`    最大:       ${formatTime(max)}`);
   console.log(`    p95:        ${formatTime(p95)}`);
   console.log(`  内訳:`);
-  console.log(`    前処理平均: ${formatTime(preTimes.reduce((a, b) => a + b, 0) / preTimes.length)}`);
-  console.log(`    推論平均:   ${formatTime(infTimes.reduce((a, b) => a + b, 0) / infTimes.length)}`);
+  if (serverUrl) {
+    console.log(`    サーバ推論平均: ${formatTime(infTimes.reduce((a, b) => a + b, 0) / infTimes.length)}`);
+  } else {
+    console.log(`    前処理平均: ${formatTime(preTimes.reduce((a, b) => a + b, 0) / preTimes.length)}`);
+    console.log(`    推論平均:   ${formatTime(infTimes.reduce((a, b) => a + b, 0) / infTimes.length)}`);
+  }
   console.log(`  メモリ:`);
   console.log(`    ピーク RSS: ${formatBytes(rssPeak)}`);
   console.log(`    ピーク Heap:${formatBytes(heapPeak)}`);
@@ -238,6 +286,8 @@ async function main() {
   const report = {
     timestamp: new Date().toISOString(),
     imageDir: imageDir,
+    serverUrl: serverUrl || null,
+    mode: serverUrl ? "server" : "local",
     totalImages: images.length,
     succeeded: n,
     errors: results.length - n,
