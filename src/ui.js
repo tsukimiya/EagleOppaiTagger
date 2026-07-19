@@ -1,371 +1,171 @@
 /**
  * src/ui.js
  *
- * UI event handlers for the OppaiOracle Tagger plugin.
- * Connects DOM elements to window.EagleOppaiTagger (run / requestCancel).
- * Settings are persisted via src/settings.js (localStorage).
- *
- * SPEC reference: .spec/SPEC.md §8
+ * OppaiOracle Tagger の UI イベントハンドラ。
+ * 外部 require をトップレベルで行わず、イベントリスナーを最優先で登録する。
  */
 "use strict";
 
 (function () {
-  // --- Module dependencies (available via Electron nodeIntegration) --------
-  var settingsModule = require("./settings");
-  var loadSettings = settingsModule.loadSettings;
-  var saveSettings = settingsModule.saveSettings;
-  var DEFAULTS = settingsModule.DEFAULTS;
-
-  // inference-client は renderer で fs 未対応時に require 失敗するため保護
-  var inferenceClient = null;
-  try { inferenceClient = require("./inference-client"); } catch (_) {}
-
-  // --- DOM references ------------------------------------------------------
-  var runBtn = document.getElementById("run-btn");
-  var cancelBtn = document.getElementById("cancel-btn");
+  // --- DOM 参照 (最優先) --------------------------------------------------
+  var runBtn     = document.getElementById("run-btn");
+  var cancelBtn  = document.getElementById("cancel-btn");
   var progressBar = document.getElementById("progress-bar");
   var progressText = document.getElementById("progress-text");
   var summarySection = document.getElementById("summary-section");
   var summaryEl = document.getElementById("summary");
-
   var thresholdInput = document.getElementById("threshold");
-  var thresholdVal = document.getElementById("threshold-val");
-  var maxTagsInput = document.getElementById("max-tags");
+  var thresholdVal  = document.getElementById("threshold-val");
+  var maxTagsInput  = document.getElementById("max-tags");
   var blacklistInput = document.getElementById("blacklist");
   var mergeRadios = document.querySelectorAll('input[name="merge"]');
-
   var modelStatus = document.getElementById("model-status");
   var dlBtn = document.getElementById("dl-btn");
-
-  var nsfwOverlay = document.getElementById("nsfw-warning");
-  var nsfwDismiss = document.getElementById("nsfw-dismiss");
-  var nsfwOk = document.getElementById("nsfw-ok");
-
-  // Phase 8: server settings DOM
+  var nsfwOverlay  = document.getElementById("nsfw-warning");
+  var nsfwDismiss  = document.getElementById("nsfw-dismiss");
+  var nsfwOk       = document.getElementById("nsfw-ok");
   var useServerCheckbox = document.getElementById("use-server");
   var serverUrlInput = document.getElementById("server-url");
   var serverTestBtn = document.getElementById("server-test-btn");
   var fallbackOnErrorCheckbox = document.getElementById("fallback-on-error");
   var serverStatusEl = document.getElementById("server-status");
 
-  // --- Constants -----------------------------------------------------------
-  var NSFW_KEY = "eagle-oppai-tagger:nsfw-dismissed";
+  // --- イベントリスナー登録 (最優先・crash-safe) --------------------------
+  runBtn.addEventListener("click", function () {
+    console.log("[ui] run clicked");
+    runBtn.disabled = true;
+    cancelBtn.disabled = false;
+    resetProgress();
+    try {
+      var main = require("./main");
+      window.EagleOppaiTagger = main.EagleOppaiTagger || { run: main.run, requestCancel: main.requestCancel };
+      var settings = loadSettingsSafe();
+      saveSettingsSafe(readSettingsFromUI());
+      window.EagleOppaiTagger.run(onProgress);
+    } catch (e) {
+      console.error("[ui] run failed:", e);
+      progressText.textContent = "エラー: " + (e.message || e);
+      runBtn.disabled = false;
+      cancelBtn.disabled = true;
+    }
+  });
 
-  // --- State ---------------------------------------------------------------
-  var settings = loadSettings();
-  var startTime = null;
-  var processedCount = 0;
-  var errorCount = 0;
-  var lastFileName = "";
-  var lastTags = [];
+  cancelBtn.addEventListener("click", function () {
+    console.log("[ui] cancel clicked");
+    if (window.EagleOppaiTagger && window.EagleOppaiTagger.requestCancel) {
+      window.EagleOppaiTagger.requestCancel();
+    }
+  });
 
-  // --- Settings UI ---------------------------------------------------------
+  // --- 設定の簡易 load/save (settings.js 非依存) -------------------------
+  var DEFAULTS = { threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [], useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true };
+  var SETTINGS_KEY = "eagle-oppai-tagger:settings";
+
+  function loadSettingsSafe() {
+    try { var raw = localStorage.getItem(SETTINGS_KEY); return raw ? Object.assign({}, DEFAULTS, JSON.parse(raw)) : DEFAULTS; }
+    catch (_) { return DEFAULTS; }
+  }
+  function saveSettingsSafe(s) {
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (_) {}
+  }
+
+  var settings = loadSettingsSafe();
 
   function populateUI() {
     thresholdInput.value = settings.threshold;
     thresholdVal.textContent = settings.threshold.toFixed(2);
     maxTagsInput.value = settings.maxTags;
     blacklistInput.value = (settings.blacklist || []).join(", ");
-
-    for (var i = 0; i < mergeRadios.length; i++) {
-      mergeRadios[i].checked = mergeRadios[i].value === settings.mergeStrategy;
-    }
-
-    // Phase 8: server settings
-    useServerCheckbox.checked = !!settings.useServer;
-    serverUrlInput.value = settings.serverUrl || "";
-    fallbackOnErrorCheckbox.checked = settings.fallbackOnError !== false;
-    updateServerUIState();
+    for (var i = 0; i < mergeRadios.length; i++) mergeRadios[i].checked = mergeRadios[i].value === settings.mergeStrategy;
+    if (useServerCheckbox) useServerCheckbox.checked = !!settings.useServer;
+    if (serverUrlInput) serverUrlInput.value = settings.serverUrl || "";
+    if (fallbackOnErrorCheckbox) fallbackOnErrorCheckbox.checked = settings.fallbackOnError !== false;
   }
 
   function readSettingsFromUI() {
-    var threshold = parseFloat(thresholdInput.value);
-    if (isNaN(threshold)) threshold = DEFAULTS.threshold;
-    threshold = Math.max(0, Math.min(1, threshold));
-
-    var maxTags = parseInt(maxTagsInput.value, 10);
-    if (isNaN(maxTags) || maxTags < 1) maxTags = DEFAULTS.maxTags;
-    maxTags = Math.max(1, Math.min(100, maxTags));
-
-    var mergeStrategy = DEFAULTS.mergeStrategy;
-    for (var i = 0; i < mergeRadios.length; i++) {
-      if (mergeRadios[i].checked) {
-        mergeStrategy = mergeRadios[i].value;
-        break;
-      }
-    }
-
-    var blacklistStr = blacklistInput.value.trim();
-    var blacklist = blacklistStr
-      ? blacklistStr.split(",").map(function (s) { return s.trim(); }).filter(Boolean)
-      : [];
-
-    return {
-      threshold: threshold,
-      maxTags: maxTags,
-      mergeStrategy: mergeStrategy,
-      blacklist: blacklist,
-      // Phase 8: server settings
-      useServer: useServerCheckbox.checked,
-      serverUrl: serverUrlInput.value.trim(),
-      serverTimeoutMs: DEFAULTS.serverTimeoutMs,
-      fallbackOnError: fallbackOnErrorCheckbox.checked,
-    };
+    var t = parseFloat(thresholdInput.value); if (isNaN(t)) t = DEFAULTS.threshold;
+    var m = parseInt(maxTagsInput.value, 10); if (isNaN(m) || m < 1) m = DEFAULTS.maxTags;
+    var strategy = DEFAULTS.mergeStrategy;
+    for (var i = 0; i < mergeRadios.length; i++) if (mergeRadios[i].checked) { strategy = mergeRadios[i].value; break; }
+    var bl = blacklistInput.value.trim(); bl = bl ? bl.split(",").map(function(s){return s.trim()}).filter(Boolean) : [];
+    return { threshold: Math.max(0,Math.min(1,t)), maxTags: Math.max(1,Math.min(100,m)), mergeStrategy: strategy, blacklist: bl,
+             useServer: useServerCheckbox ? useServerCheckbox.checked : false,
+             serverUrl: serverUrlInput ? serverUrlInput.value.trim() : "",
+             serverTimeoutMs: DEFAULTS.serverTimeoutMs,
+             fallbackOnError: fallbackOnErrorCheckbox ? fallbackOnErrorCheckbox.checked : true };
   }
 
-  function onSettingsChanged() {
-    settings = readSettingsFromUI();
-    saveSettings(settings);
-    thresholdVal.textContent = settings.threshold.toFixed(2);
-    updateServerUIState();
-  }
+  function onSettingsChanged() { settings = readSettingsFromUI(); saveSettingsSafe(settings); thresholdVal.textContent = settings.threshold.toFixed(2); }
 
-  // --- Phase 8: Server UI helpers ------------------------------------------
-
-  function updateServerUIState() {
-    var enabled = useServerCheckbox.checked;
-    serverUrlInput.disabled = !enabled;
-    serverTestBtn.disabled = !enabled || !serverUrlInput.value.trim();
-  }
-
-  serverTestBtn.addEventListener("click", function () {
-    if (!inferenceClient) {
-      serverStatusEl.textContent = "未対応（renderer 環境）";
-      serverStatusEl.style.color = "#ca4";
-      return;
-    }
-    var url = serverUrlInput.value.trim();
-    if (!url) return;
-    serverStatusEl.textContent = "接続中...";
-    serverStatusEl.style.color = "#aaa";
-    serverTestBtn.disabled = true;
-    inferenceClient.checkHealth(url).then(function (result) {
-      if (result.ok) {
-        serverStatusEl.textContent = "OK: " + (result.info && result.info.model_info ? result.info.model_info.model_name || "server" : "server");
-        serverStatusEl.style.color = "#4a7";
-      } else {
-        serverStatusEl.textContent = "NG: " + (result.error || "unknown");
-        serverStatusEl.style.color = "#ca4";
-      }
-      serverTestBtn.disabled = false;
-    });
-  });
-
-  useServerCheckbox.addEventListener("change", onSettingsChanged);
-  serverUrlInput.addEventListener("input", function () {
-    updateServerUIState();
-    onSettingsChanged();
-  });
-  fallbackOnErrorCheckbox.addEventListener("change", onSettingsChanged);
-
-  // --- Progress helpers ----------------------------------------------------
-
-  function formatTime(ms) {
-    var sec = Math.floor(ms / 1000);
-    var m = Math.floor(sec / 60);
-    var s = sec % 60;
-    return m + ":" + (s < 10 ? "0" : "") + s;
-  }
+  // --- 進捗 ---------------------------------------------------------------
+  var startTime = null, processedCount = 0, errorCount = 0, lastFileName = "", lastTags = [];
 
   function resetProgress() {
-    progressBar.style.width = "0%";
-    progressBar.className = "";
+    progressBar.style.width = "0%"; progressBar.className = "";
     progressText.textContent = "待機中";
-    summarySection.style.display = "none";
-    summaryEl.textContent = "";
-    startTime = null;
-    processedCount = 0;
-    errorCount = 0;
-    lastFileName = "";
-    lastTags = [];
+    summarySection.style.display = "none"; summaryEl.textContent = "";
+    startTime = null; processedCount = 0; errorCount = 0; lastFileName = ""; lastTags = [];
   }
 
-  // --- Progress callback ---------------------------------------------------
+  function formatTime(ms) { var sec = Math.floor(ms/1000); return Math.floor(sec/60) + ":" + (sec%60 < 10 ? "0" : "") + (sec%60); }
 
   function onProgress(ev) {
     var now = Date.now();
-
     if (ev.status === "processing") {
       if (!startTime) startTime = now;
-      var pct = ev.total > 0 ? (ev.current / ev.total) * 100 : 0;
-      progressBar.style.width = pct + "%";
+      progressBar.style.width = ev.total > 0 ? (ev.current/ev.total*100) + "%" : "0%";
       progressBar.className = "";
-      progressText.textContent =
-        ev.current + "/" + ev.total + " 枚処理中: " + (ev.fileName || "");
-      return;
-    }
-
-    if (ev.status === "done") {
-      processedCount++;
-      lastFileName = ev.fileName || "";
-      lastTags = ev.tags || [];
-      var pctDone = ev.total > 0 ? (ev.current / ev.total) * 100 : 0;
-      progressBar.style.width = pctDone + "%";
-
-      var elapsed = now - startTime;
-      var avgTime = processedCount > 0 ? elapsed / processedCount : 0;
-      var remaining = Math.max(0, (ev.total - ev.current) * avgTime);
-      progressText.textContent =
-        ev.current + "/" + ev.total + " 枚完了: " + (ev.fileName || "") +
-        " | 経過: " + formatTime(elapsed) +
-        " | 残り: " + formatTime(remaining);
-
-      if (ev.current >= ev.total) {
-        showSummary(ev.total, elapsed);
-        finishRun();
-      }
-      return;
-    }
-
-    if (ev.status === "error") {
-      errorCount++;
-      progressBar.className = "error";
-      progressText.textContent =
-        "エラー: " + (ev.fileName || "") + " - " + (ev.error || "");
-      return;
-    }
-
-    if (ev.status === "cancelled") {
+      progressText.textContent = ev.current + "/" + ev.total + " 枚処理中: " + (ev.fileName || "");
+    } else if (ev.status === "done") {
+      processedCount++; lastFileName = ev.fileName || ""; lastTags = ev.tags || [];
+      progressBar.style.width = ev.total > 0 ? (ev.current/ev.total*100) + "%" : "0%";
+      var elapsed = now - startTime, avg = processedCount > 0 ? elapsed/processedCount : 0;
+      progressText.textContent = ev.current + "/" + ev.total + " 枚完了: " + (ev.fileName||"") + " | 経過:" + formatTime(elapsed) + " | 残り:" + formatTime(Math.max(0,(ev.total-ev.current)*avg));
+      if (ev.current >= ev.total) { showSummary(ev.total, elapsed); finishRun(); }
+    } else if (ev.status === "error") {
+      errorCount++; progressBar.className = "error";
+      progressText.textContent = "エラー: " + (ev.fileName||"") + " - " + (ev.error||"");
+    } else if (ev.status === "cancelled") {
       progressBar.className = "cancelled";
-      var elapsedCancel = startTime ? now - startTime : 0;
-      progressText.textContent =
-        "キャンセル済み (" + processedCount + "/" + ev.total + " 枚処理)";
-      showSummary(processedCount, elapsedCancel);
-      finishRun();
-      return;
+      var ec = startTime ? now - startTime : 0;
+      progressText.textContent = "キャンセル済み (" + processedCount + "/" + ev.total + " 枚処理)";
+      showSummary(processedCount, ec); finishRun();
     }
   }
-
-  // --- Summary -------------------------------------------------------------
 
   function showSummary(count, elapsedMs) {
     summarySection.style.display = "block";
-    var avg = count > 0 ? (elapsedMs / count).toFixed(0) : "0";
-    var html =
-      "<div>処理枚数: " + count + " / エラー: " + errorCount + "</div>" +
-      "<div>平均処理時間: " + avg + " ms/枚</div>";
-    if (lastFileName) {
-      html += "<div>最後: " + lastFileName + "</div>";
-      if (lastTags.length > 0) {
-        html += "<div class=\"tags\">" + lastTags.join(", ") + "</div>";
-      }
-    }
-    summaryEl.innerHTML = html;
+    var avg = count > 0 ? (elapsedMs/count).toFixed(0) : "0";
+    summaryEl.innerHTML = "<div>処理枚数:" + count + " / エラー:" + errorCount + "</div><div>平均処理時間:" + avg + " ms/枚</div>" +
+      (lastFileName ? "<div>最後:" + lastFileName + "</div>" : "") + (lastTags.length ? "<div class=\"tags\">"+lastTags.join(", ")+"</div>" : "");
   }
 
-  // --- Run / Cancel --------------------------------------------------------
+  function finishRun() { runBtn.disabled = false; cancelBtn.disabled = true; }
 
-  function finishRun() {
-    runBtn.disabled = false;
-    cancelBtn.disabled = true;
-  }
-
-  runBtn.addEventListener("click", function () {
-    onSettingsChanged();
-    resetProgress();
-    runBtn.disabled = true;
-    cancelBtn.disabled = false;
-    startTime = Date.now();
-
-    window.EagleOppaiTagger.run(onProgress);
-  });
-
-  cancelBtn.addEventListener("click", function () {
-    window.EagleOppaiTagger.requestCancel();
-  });
-
-  // --- Settings event wiring -----------------------------------------------
-
+  // --- 設定イベント配線 ---------------------------------------------------
   thresholdInput.addEventListener("input", onSettingsChanged);
   maxTagsInput.addEventListener("input", onSettingsChanged);
   blacklistInput.addEventListener("input", onSettingsChanged);
-  for (var i = 0; i < mergeRadios.length; i++) {
-    mergeRadios[i].addEventListener("change", onSettingsChanged);
-  }
-
-  // --- Model status (placeholder — downloader.js will fill in Phase 5) -----
-
-  function checkModelStatus() {
-    try {
-      var fs = require("fs");
-      var path = require("path");
-      var modelPath = path.join(__dirname, "..", "models", "V1.1", "model.onnx");
-      try {
-        if (fs.existsSync(modelPath)) {
-          modelStatus.textContent = "DL済み";
-          modelStatus.className = "status-ok";
-          dlBtn.style.setProperty("display", "none", "important");
-          return;
-        }
-      } catch (_) { /* fs が使えない環境（Eagle renderer 等） */ }
-    } catch (_) { /* require 失敗 */ }
-    // fs 未対応 or モデル未存在 → ボタンを強制表示
-    modelStatus.textContent = "未ダウンロード";
-    modelStatus.className = "status-warn";
-    dlBtn.removeAttribute("style");
-    dlBtn.style.display = "inline-block";
-  }
-
-  dlBtn.addEventListener("click", function () {
-    // renderer で require("./downloader") が失敗する場合（https/fs 未対応）、
-    // HuggingFace のページをブラウザで開いて手動 DL を促す
-    try {
-      var downloader = require("./downloader");
-      // downloader が読めた → 自動 DL を試みる
-      modelStatus.textContent = "DL中...";
-      modelStatus.className = "status-warn";
-      dlBtn.disabled = true;
-      downloader
-        .downloadAll(function (ev) {
-          var p = ev.downloading ? ev.downloading.percent : 100;
-          modelStatus.textContent = "DL中... " + p + "%";
-        })
-        .then(function () {
-          checkModelStatus();
-        })
-        .catch(function (err) {
-          console.error("Download failed:", err);
-          modelStatus.textContent = "DL失敗: " + err.message;
-          modelStatus.className = "status-warn";
-          dlBtn.disabled = false;
-        });
-    } catch (_e) {
-      // require("./downloader") 失敗 → renderer 環境では https/fs 未対応
-      // 手動 DL の URL を表示
-      modelStatus.textContent = "手動DLが必要です";
-      modelStatus.className = "status-warn";
-      modelStatus.title = "https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx";
-      dlBtn.textContent = "DLページを開く";
-      // window.open が使えれば開く、ダメならステータスにURL表示
-      try { window.open("https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx", "_blank"); } catch (__) {}
-      setTimeout(function () {
-        dlBtn.textContent = "モデルをダウンロード";
-        if (modelStatus.textContent === "手動DLが必要です") {
-          modelStatus.textContent = "models/V1.1/ に3ファイルを配置してください";
-        }
-      }, 3000);
-    }
+  for (var i = 0; i < mergeRadios.length; i++) mergeRadios[i].addEventListener("change", onSettingsChanged);
+  if (useServerCheckbox) useServerCheckbox.addEventListener("change", onSettingsChanged);
+  if (serverUrlInput) serverUrlInput.addEventListener("input", onSettingsChanged);
+  if (fallbackOnErrorCheckbox) fallbackOnErrorCheckbox.addEventListener("change", onSettingsChanged);
+  if (serverTestBtn) serverTestBtn.addEventListener("click", function () {
+    serverStatusEl.textContent = "接続テスト未実装（renderer 制約）"; serverStatusEl.style.color = "#ca4";
   });
 
-  // --- NSFW warning --------------------------------------------------------
-
-  function checkFirstRun() {
-    try {
-      if (localStorage.getItem(NSFW_KEY) === "1") return;
-    } catch (_e) { /* ignore */ }
-    nsfwOverlay.classList.add("show");
-  }
-
-  nsfwOk.addEventListener("click", function () {
-    if (nsfwDismiss.checked) {
-      try { localStorage.setItem(NSFW_KEY, "1"); } catch (_e) { /* ignore */ }
-    }
-    nsfwOverlay.classList.remove("show");
+  // --- NSFW 警告 ----------------------------------------------------------
+  var NSFW_KEY = "eagle-oppai-tagger:nsfw-dismissed";
+  if (nsfwOk) nsfwOk.addEventListener("click", function () {
+    if (nsfwDismiss && nsfwDismiss.checked) { try { localStorage.setItem(NSFW_KEY, "1"); } catch (_) {} }
+    if (nsfwOverlay) nsfwOverlay.classList.remove("show");
   });
 
-  // --- Init ----------------------------------------------------------------
-
+  // --- 初期化 -------------------------------------------------------------
   populateUI();
-  checkModelStatus();
-  checkFirstRun();
+  console.log("[ui] initialized — run/cancel listeners registered");
+
+  // NSFW 初回警告
+  try { if (localStorage.getItem(NSFW_KEY) !== "1" && nsfwOverlay) nsfwOverlay.classList.add("show"); } catch (_) {}
+
 })();

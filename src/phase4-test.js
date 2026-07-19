@@ -77,9 +77,7 @@ function testHtmlStructure() {
   ok(html.includes('value="overwrite"'), "overwrite strategy radio present");
   ok(html.includes('value="diff"'), "diff strategy radio present");
 
-  // Script tags
-  ok(html.includes('src="src/settings.js"'), "settings.js script tag present");
-  ok(html.includes('src="src/main.js"'), "main.js script tag present");
+  // Script tags (settings.js/main.js は ui.js から遅延ロードに変更)
   ok(html.includes('src="src/ui.js"'), "ui.js script tag present");
 
   // NSFW warning text (from SPEC §8)
@@ -113,8 +111,8 @@ function testUiModuleStructure() {
 
   const src = fs.readFileSync(uiPath, "utf-8");
 
-  // Must require settings
-  ok(src.includes('require("./settings")'), "ui.js requires settings module");
+  // Must reference settings (localStorage inline)
+  ok(src.includes("localStorage"), "ui.js uses localStorage directly for settings");
 
   // Must reference EagleOppaiTagger API
   ok(
@@ -135,9 +133,9 @@ function testUiModuleStructure() {
   // Must wire event listeners
   ok(src.includes("addEventListener"), "uses addEventListener");
 
-  // Must persist settings
-  ok(src.includes("saveSettings"), "calls saveSettings");
-  ok(src.includes("loadSettings"), "calls loadSettings");
+  // Must persist settings via localStorage directly
+  ok(src.includes("localStorage.setItem"), "calls localStorage.setItem");
+  ok(src.includes("localStorage.getItem"), "calls localStorage.getItem");
 
   // NSFW warning logic
   ok(src.includes("nsfw-dismiss"), "references nsfw-dismiss checkbox");
