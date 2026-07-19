@@ -278,18 +278,23 @@
   // --- Model status (placeholder — downloader.js will fill in Phase 5) -----
 
   function checkModelStatus() {
-    var fs = require("fs");
-    var path = require("path");
-    var modelPath = path.join(__dirname, "..", "models", "V1.1", "model.onnx");
-    if (fs.existsSync(modelPath)) {
-      modelStatus.textContent = "DL済み";
-      modelStatus.className = "status-ok";
-      dlBtn.style.display = "none";
-    } else {
-      modelStatus.textContent = "未ダウンロード";
-      modelStatus.className = "status-warn";
-      dlBtn.style.display = "";
-    }
+    try {
+      var fs = require("fs");
+      var path = require("path");
+      var modelPath = path.join(__dirname, "..", "models", "V1.1", "model.onnx");
+      try {
+        if (fs.existsSync(modelPath)) {
+          modelStatus.textContent = "DL済み";
+          modelStatus.className = "status-ok";
+          dlBtn.style.display = "none";
+          return;
+        }
+      } catch (_) { /* fs が使えない環境（Eagle renderer 等） */ }
+    } catch (_) { /* require 失敗 */ }
+    // fs 未対応 or モデル未存在 → ボタンを表示
+    modelStatus.textContent = "未ダウンロード";
+    modelStatus.className = "status-warn";
+    dlBtn.style.display = "";
   }
 
   dlBtn.addEventListener("click", function () {
