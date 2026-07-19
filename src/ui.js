@@ -286,15 +286,16 @@
         if (fs.existsSync(modelPath)) {
           modelStatus.textContent = "DL済み";
           modelStatus.className = "status-ok";
-          dlBtn.style.display = "none";
+          dlBtn.style.setProperty("display", "none", "important");
           return;
         }
       } catch (_) { /* fs が使えない環境（Eagle renderer 等） */ }
     } catch (_) { /* require 失敗 */ }
-    // fs 未対応 or モデル未存在 → ボタンを表示
+    // fs 未対応 or モデル未存在 → ボタンを強制表示
     modelStatus.textContent = "未ダウンロード";
     modelStatus.className = "status-warn";
-    dlBtn.style.display = "";
+    dlBtn.removeAttribute("style");
+    dlBtn.style.display = "inline-block";
   }
 
   dlBtn.addEventListener("click", function () {
