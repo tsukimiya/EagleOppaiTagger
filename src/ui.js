@@ -36,11 +36,14 @@
     runBtn.disabled = true;
     cancelBtn.disabled = false;
     resetProgress();
+    var path = require("path");
+    var sd = __dirname || "";
     var diag = [];
-    try { diag.push("preprocess"); require("./preprocess"); } catch(e) { diag.push("preprocess FAIL: "+e.message); }
-    try { diag.push("inference"); require("./inference"); } catch(e) { diag.push("inference FAIL: "+e.message); }
-    try { diag.push("tags"); require("./tags"); } catch(e) { diag.push("tags FAIL: "+e.message); }
-    try { diag.push("main"); var main = require("./main"); diag.push("main OK"); } catch(e) { diag.push("main FAIL: "+e.message); }
+    try { require(path.join(sd, "preprocess")); diag.push("preprocess"); } catch(e) { diag.push("preprocess FAIL: "+e.message); }
+    try { require(path.join(sd, "inference")); diag.push("inference"); } catch(e) { diag.push("inference FAIL: "+e.message); }
+    try { require(path.join(sd, "tags")); diag.push("tags"); } catch(e) { diag.push("tags FAIL: "+e.message); }
+    var main = null;
+    try { main = require(path.join(sd, "main")); diag.push("main OK"); } catch(e) { diag.push("main FAIL: "+e.message); }
     progressText.textContent = diag.join(" | ");
     if (!main) { runBtn.disabled = false; cancelBtn.disabled = true; return; }
     try {
