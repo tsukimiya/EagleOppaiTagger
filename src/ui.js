@@ -15,7 +15,10 @@
   var loadSettings = settingsModule.loadSettings;
   var saveSettings = settingsModule.saveSettings;
   var DEFAULTS = settingsModule.DEFAULTS;
-  var inferenceClient = require("./inference-client");
+
+  // inference-client は renderer で fs 未対応時に require 失敗するため保護
+  var inferenceClient = null;
+  try { inferenceClient = require("./inference-client"); } catch (_) {}
 
   // --- DOM references ------------------------------------------------------
   var runBtn = document.getElementById("run-btn");
@@ -126,6 +129,11 @@
   }
 
   serverTestBtn.addEventListener("click", function () {
+    if (!inferenceClient) {
+      serverStatusEl.textContent = "未対応（renderer 環境）";
+      serverStatusEl.style.color = "#ca4";
+      return;
+    }
     var url = serverUrlInput.value.trim();
     if (!url) return;
     serverStatusEl.textContent = "接続中...";
