@@ -1,0 +1,19 @@
+Eagle OppaiOracle Tagger
+Copyright 2026 tsukimiya
+
+This product includes software developed by the following projects:
+
+- OppaiOracle (https://huggingface.co/Grio43/OppaiOracle)
+  License: Apache License 2.0
+  Copyright (c) Grio43
+
+- ONNX Runtime (https://github.com/microsoft/onnxruntime)
+  License: MIT License
+  Copyright (c) Microsoft Corporation
+
+- Jimp (https://github.com/oliver-moran/jimp)
+  License: MIT License
+  Copyright (c) 2018 Oliver Moran
+
+- Eagle Plugin API (https://developer.eagle.cool/plugin-api)
+  License: Eagle 利用規約に従う
