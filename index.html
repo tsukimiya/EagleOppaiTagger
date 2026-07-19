@@ -68,7 +68,7 @@
     <div class="row">
       <span>モデル状態:</span>
       <span id="model-status" class="status-warn">未確認</span>
-      <button id="dl-btn" class="dl">モデルをダウンロード</button>
+      <button id="dl-btn" class="dl" onclick="document.getElementById('model-status').textContent='手動DL: huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx';try{window.open('https://huggingface.co/Grio43/OppaiOracle/tree/main/V1.1_onnx','_blank')}catch(_){};setTimeout(function(){document.getElementById('model-status').textContent='models/V1.1/ に3ファイルを配置してください'},3000)">モデルをダウンロード</button>
     </div>
   </section>
 
