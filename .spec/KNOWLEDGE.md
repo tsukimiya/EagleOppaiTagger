@@ -80,6 +80,30 @@
 - **Context**: Eagle Plugin API に設定 API の有無が不明（W6）
 - **Decision**: デフォルトは `localStorage`。Phase 0 で `eagle.plugin.*` を調査し、存在すれば切替
 - **根拠**: Chromium 系で確実動作・Eagle 専用 API があれば利便性向上
+- **解決**: Phase 0 調査で Eagle 側 API は存在しないと確認（`.spec/eagle-config-api-research.md`）。localStorage で確定
+
+### ADR-8: adm-zip を `overrides` で 0.6.0 に固定（CVE-2026-39244 対応）
+
+- **Context**: `onnxruntime-node@1.27.0` が依存する `adm-zip@0.5.18` に HIGH 脆弱性（CVE-2026-39244・クラフト ZIP で 4GB メモリ確保）。npm audit が HIGH 6件を報告
+- **Decision**: `package.json` の `overrides` で `adm-zip: "0.6.0"` を強制注入
+- **根拠**:
+  - `adm-zip@0.6.0` は Node >= 14 対応・API 互換性あり・Electron 22.3.7 で動作
+  - `npm audit fix --force` は onnxruntime-node を 1.21.1 にダウングレード（B1 スパイク PASS 実績リセット）するため不可
+  - onnxruntime-node 1.28.0-dev でも adm-zip `^0.5.16` のまま（Microsoft 側未対応）
+  - overrides なら onnxruntime-node 本体を維持しつつ transitive のみ昇格
+- **影響**: HIGH 脆弱性 0 件に減少。残り moderate 4件は ADR-9 で別処理
+
+### ADR-9: jimp 0.22.x の file-type 脆弱性はリスク受容
+
+- **Context**: `jimp@0.22.12` → `@jimp/core` → `file-type@16.5.4` に MODERATE 脆弱性（CVE-2026-31808・ASF パーサの無限ループ）
+- **Decision**: jimp 0.22.x に留まり、file-type 脆弱性はリスク受容
+- **根拠**:
+  - jimp v1 は Node >= 18 必須 → Electron 22.3.7（Node 16.17.1）では動作不可
+  - 当プラグインは PNG/JPEG/WebP/BMP のみ扱い、ASF (WMV/WMA) は未使用
+  - 攻撃経路が狭い（ユーザーが自分の画像を選択する前提）
+  - 影響は DoS（イベントループ停止）のみ
+- **影響**: `npm audit` で moderate 4件（jimp/@jimp/custom/@jimp/core/file-type）が残存。実害ほぼなし
+- **見直し条件**: Electron が Node 18+ に上がったら jimp v1 移行を再検討
 
 ---
 
