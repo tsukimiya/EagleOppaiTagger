@@ -1,7 +1,8 @@
-# TODO — Eagle OppaiOracle Tagger Plugin (v2)
+# TODO — Eagle OppaiOracle Tagger Plugin (v3)
 
 > `SPEC.md` 確定後に実作業へ。各 Phase に **DoD（検証項目）** を組み込んでいる。
 > Phase を完了したら該当行にチェックを入れ、`KNOWLEDGE.md` に学びを記録する。
+> v3 で Phase 7-9（サーバ化対応）を追加。
 
 ---
 
@@ -117,6 +118,103 @@
 - [ ] クリーン環境（別マシン or 別ユーザー）で展開 → 初回起動 → タグ付けまで完結するか検証
 - [ ] **DoD**: 1枚5秒以内 / ピーク 2.5 GB 以下 / クリーン環境で完結
 - [ ] **DoD**: 配布 zip が 5 MB 以下
+
+---
+
+## Phase 7: 推論サーバ実装
+
+- [ ] `server/requirements.txt` を作成（FastAPI, uvicorn[standard], onnxruntime-gpu, pillow, numpy, python-multipart）
+- [ ] `server/model_loader.py` を実装:
+  - `get_session(model_path)` — onnxruntime session 生成・キャッシュ
+  - プロバイダー自動検出（CUDA → DirectML → CPU の優先順）
+  - `get_provider_info()` — 使用中プロバイダー・GPU 名を返す
+- [ ] `server/preprocess.py` を実装:
+  - PIL で画像読み込み
+  - letterbox（448×448・パッド色 [114,114,114]・アスペクト比保持）
+  - `padding_mask` 構築（余白 = true）
+  - `(x/255 - 0.5) / 0.5` 正規化
+  - BCHW float32 テンソル + bool マスクを返す
+  - **公式 `app.py` の `letterbox()` / `preprocess()` を流用**
+- [ ] `server/main.py` を実装:
+  - FastAPI アプリ・uvicorn で起動
+  - `POST /infer` — multipart/form-data で画像受信 → 前処理 → 推論 → JSON（`probabilities`, `elapsed_ms`）返却
+  - `GET /health` — ステータス・モデルロード状態・GPU 利用可能性
+  - `GET /info` — バリアント・タグ数・プロバイダー・平均応答時間
+  - 起動時にモデルをロード（バックグラウンドロード・ロード中は `/health` が `model_loaded: false` を返す）
+- [ ] `server/README.md` を作成:
+  - venv セットアップ手順
+  - GPU 認識確認方法（`nvidia-smi` + `/health`）
+  - 起動コマンド（`uvicorn main:app --host 0.0.0.0 --port 8000`）
+  - CPU のみ環境での動作について
+- [ ] `server/tests/test_api.py` を実装:
+  - `/health` のレスポンス形式検証
+  - `/infer` の正常推論（テスト画像使用）
+  - `/infer` の不正入力エラー（空ファイル・非画像ファイル）
+  - `/info` のモデル情報返却
+- [ ] **DoD**: GPU 環境で `/infer` が正常に確率配列（19294次元）を返す
+- [ ] **DoD**: `/health` で GPU 利用可能性が正しく報告される
+- [ ] **DoD**: CPU のみ環境でも自動フォールバックで動作する
+
+---
+
+## Phase 8: プラグイン側クライアント化
+
+- [ ] `src/inference-client.js` を実装:
+  - `InferenceClient` クラス（`serverUrl`, `timeoutMs` をコンストラクタで指定）
+  - `healthCheck()` — `GET /health` を fetch・結果を返す
+  - `getServerInfo()` — `GET /info` を fetch・モデル情報を返す
+  - `inferImage(imageBuffer, filename)` — `POST /infer` を multipart/form-data で送信・確率配列を返す
+  - タイムアウト処理（デフォルト 30秒）
+  - リトライ（最大1回・タイムアウト時のみ）
+  - Node 組み込みの `http` モジュールを使用（npm 依存なし）
+- [ ] `src/settings.js` に以下を追加:
+  - `serverUrl`（デフォルト: `'http://localhost:8000'`）
+  - `useServer`（デフォルト: `true`）
+  - `serverTimeoutMs`（デフォルト: `30000`）
+  - `fallbackOnServerError`（デフォルト: `true`）
+  - 既存設定との後方互換性を維持（`DEFAULTS` に追加するのみ）
+- [ ] `src/main.js` の推論ルートを改修:
+  - `useServer === true` → `healthCheck()` → OK なら `inferImage()` でサーバ推論
+  - ヘルス NG or `useServer === false` → `inference.js` のローカル推論
+  - サーバ推論中にネットワークエラー → `fallbackOnServerError` に応じてフォールバック or エラースロー
+  - 既存の `preprocess` / `infer` / `probsToTags` / `mergeTags` / `save` パイプラインはローカル経路として維持
+- [ ] `src/ui.js` にサーバ設定 UI を追加:
+  - サーバ URL 入力フィールド
+  - 「サーバを使用」チェックボックス
+  - フォールバック設定（ラジオ: 自動切替 / エラー停止）
+  - サーバステータス表示（ヘッダーに接続状態アイコン）
+  - 「接続テスト」ボタン（`healthCheck()` を実行して結果表示）
+- [ ] `src/phase8-test.js` を実装:
+  - `InferenceClient` の URL 構築・ヘッダー生成
+  - タイムアウト処理の動作
+  - `main.js` のルーティング判定（サーバ ON/OFF・ヘルス OK/NG）
+  - フォールバック動作（サーバエラー → ローカル）
+  - `require.cache` を使ったモック（実際のネットワーク接続なし）
+- [ ] **DoD**: サーバ接続時に `/infer` 経由で推論が成功し、Eagle にタグが書き込まれる
+- [ ] **DoD**: サーバ停止時にローカル推論に自動フォールバックする
+- [ ] **DoD**: フォールバック無効時にサーバエラーが正しく UI に通知される
+
+---
+
+## Phase 9: 統合テスト・プロファイリング
+
+- [ ] 推論サーバを GPU 環境で起動（`server/` のセットアップ手順に従う）
+- [ ] プラグインからサーバリクエスト → 推論結果確認:
+  - 10枚程度の画像でサーバ経由推論を実行
+  - タグ出力がローカル推論と一致することを確認（±2位以内）
+- [ ] ローカルフォールバック動作確認:
+  - サーバ停止 → プラグインで実行 → 自動切替を確認
+  - フォールバック無効設定 → サーバ停止 → エラー表示を確認
+- [ ] サーバ vs ローカルのベンチマーク:
+  - 同一の100枚バッチをサーバ（GPU）とローカル（CPU）で実行
+  - 1枚あたり wall-clock（平均・中央値・p95）を計測
+  - 結果を `KNOWLEDGE.md` に記録
+- [ ] ネットワークエラー耐性テスト:
+  - 100枚バッチ実行中にサーバを一時停止 → フォールバック → 再開
+  - タイムアウト発生時の挙動確認
+- [ ] **DoD**: サーバ経由がローカルより高速であることを確認（GPU 環境で実測）
+- [ ] **DoD**: 100枚バッチでネットワークエラー → フォールバック → 完遂する
+- [ ] **DoD**: サーバ `/info` のタグハッシュとクライアント側の `selected_tags.csv` が一致
 
 ---
 
