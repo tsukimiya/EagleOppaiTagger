@@ -13,12 +13,14 @@
  */
 "use strict";
 
-const { preprocess } = require("./preprocess");
-const { infer } = require("./inference");
-const { inferRemote } = require("./inference-client");
-const { probsToTags } = require("./tags");
-const { loadSettings } = require("./settings");
-const { getSelectedItems, saveItem } = require("./eagle-bridge");
+const path = require("path");
+const srcdir = __dirname || "";
+const { preprocess } = require(path.join(srcdir, "preprocess"));
+const { infer } = require(path.join(srcdir, "inference"));
+const { inferRemote } = require(path.join(srcdir, "inference-client"));
+const { probsToTags } = require(path.join(srcdir, "tags"));
+const { loadSettings } = require(path.join(srcdir, "settings"));
+const { getSelectedItems, saveItem } = require(path.join(srcdir, "eagle-bridge"));
 
 let cancelRequested = false;
 
