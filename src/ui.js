@@ -37,7 +37,7 @@
     cancelBtn.disabled = false;
     resetProgress();
     var path = require("path");
-    var sd = __dirname || "";
+    var sd = path.join(__dirname || "", "src");
     var diag = [];
     try { require(path.join(sd, "preprocess")); diag.push("preprocess"); } catch(e) { diag.push("preprocess FAIL: "+e.message); }
     try { require(path.join(sd, "inference")); diag.push("inference"); } catch(e) { diag.push("inference FAIL: "+e.message); }
