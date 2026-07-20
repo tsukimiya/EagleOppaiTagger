@@ -50,6 +50,17 @@
 - **allowlist 方式**（含めるファイルだけ明示）なら漏れなく安全。`src/` 内のテストも `phase*-test.js` / `verify.js` で除外
 - サイズは結果的に 0.05 MB（5MB 目標）になった
 
+## Windows junction 削除の罠（Phase 6 片付け）
+
+worktree 内に `node_modules` 等の junction（`mklink /J`）がある状態で `git worktree remove --force` すると、junction が削除できず worktree の物理ディレクトリが残る。残ったディレクトリを `rmdir` で掃除しようとすると、**リンク先（main の node_modules）の実体が一部削除されることがある**（今回は `jimp` が消失・`onnxruntime-node` は無事）。
+
+**対策**:
+- worktree で `node_modules` 等の巨大ディレクトリを使う際は junction ではなく **`npm install` で別途展開** する（時間はかかるが安全）
+- どうしても junction を使う場合、削除は `cmd /c rmdir <path>`（再帰なし・`/S` 付けない）で慎重に
+- 事故っても `npm install` で即復旧可能（5秒程度）
+
+**今回の事象**: Phase 6 worktree（`EagleOppaiTagger-phase6`）の `node_modules` junction を `rmdir` で削除したところ、main の `node_modules/jimp` が消失。`npm install` で即復元。
+
 ## その他
 - `eagle-bridge.js` は `eagle` グローバルをトップレベルで参照せず、関数内で遅延参照（初期化タイミング問題対策）
 - `inference-client.js` は `require("fs")` をトップレベルで実行せず、関数内で遅延 require（IIFE crash 防止）
