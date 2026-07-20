@@ -1,93 +1,99 @@
-# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-20 01:29)
+# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-20 14:51)
 
 ## 使用ツール
 OpenCode (oh-my-opencode)
 
 ## 現在の状態
 
-### Phase 6 途中経過（2026-07-20 追記）
+### Phase 6 完了（主要 DoD クリア・マージ済み）
 
-前セッション（2026-07-19 23:02）から Phase 3 動作確認済み（実タグ付与 + キャンセル）。本セッションでは Phase 6（プロファイリング・配布）を実施。
+Phase 6（プロファイリング・配布）の主要 DoD をすべてクリアし、PR #1 / #2 をマージ済み。
 
-**完了**:
-- `scripts/make-dist.ps1` 配布 zip スクリプト実装
-  - allowlist 方式・manifest.json の version から自動ファイル名生成
-  - Windows PS 5.x の `Compress-Archive` 互換性問題は `Push-Location` + `-Path "*"` で回避
-  - `npm run dist` エイリアス追加
-- 配布 zip ビルド検証: **0.05 MB (52,445 bytes)** / 5MB DoD クリア
-- `scripts/profile.js` に `--repeat N` オプションを追加（少数画像で長時間安定性検証用）
-- プロファイリング実施:
-  - 3枚サンプル: 平均 **2.92 s/枚** / ピーク RSS **1504 MB**（両DoD ✅）
-  - 102枚ロングラン（3枚×34回・5分連続）: 平均 **2.87 s/枚** / ピーク RSS **1503.6 MB** / **エラー0・メモリリークなし**
-- README.md 修正: Phase 8 サーバ推論時のプライバシー注意追記（SPEC L724 対応）
+**PR #1** (`99e4510`): feat(phase6): 配布 zip ビルダ + プロファイリング拡張
+- `scripts/make-dist.ps1`（allowlist 方式配布 zip ビルダ・PS 5.x/7 両対応）
+- `scripts/profile.js` に `--repeat N` オプション追加
+- `README.md` にサーバ推論時のプライバシー注意追記（SPEC L724 対応）
+- `npm run dist` エイリアス追加
+- `.gitattributes` で `*.ps1 text eol=crlf` を強制
+- Copilot レビュー3件すべて対応
 
-**残作業（ユーザー環境依存）**:
-- クリーン環境（別ユーザー/別マシン）での配布 zip 展開 → 初回起動 → タグ付け完結検証
-- Eagle 実機での100枚バッチ進捗バー滑らかさ検証（スクリプトでは代替不可）
+**PR #2** (`d62fb61`): docs(memory): Windows junction 削除時の事故と対策を追記
+- MEMORY.md に Phase 6 片付け時の事故と対策を記録
+
+### 検証済み DoD（Phase 6）
+
+| DoD | 実測 |
+|-----|------|
+| 1枚5秒以内 | ✅ 平均 2.87s（102枚ロングラン） |
+| ピーク RSS 2.5GB 以下 | ✅ 1504MB |
+| 配布 zip 5MB 以下 | ✅ 0.05MB |
+| 回帰テスト | ✅ 87+ PASS（phase2/3/4/5/8/9） |
 
 ### 実装済みの機能
+
 | Phase | 内容 | 状態 |
 |-------|------|------|
 | 1 | 画像前処理 | ✅ MAE < 5e-9 |
 | 2 | ONNX 推論 + タグ変換 | ✅ |
-| 3 | Eagle 連携 | ✅（実機タグ付与・キャンセル動作確認済） |
+| 3 | Eagle 連携 | ✅（実機タグ付与・キャンセル確認済） |
 | 4 | UI/UX | ✅ |
 | 5 | モデルダウンローダー | ✅ |
-| 6 | プロファイリング・配布 | 🟡 途中（速度/メモリ/zip サイズ DoD クリア・100枚・クリーン環境検証が残り） |
+| 6 | プロファイリング・配布 | ✅（主要 DoD クリア・クリーン環境検証のみ残り） |
 | 7 | Python FastAPI 推論サーバ | ✅ |
 | 8 | プラグイン側クライアント化 | ✅ |
 | 9a | モック E2E テスト | ✅ |
 
-### 現在の worktree
-- Path: `E:\Documents\Projects\EagleOppaiTagger-phase6`
-- Branch: `phase6/distribution-prep`
-- Base: `main` (HEAD: 1915fdd)
-- 変更ファイル（未コミット）:
-  - `scripts/make-dist.ps1`（新規）
-  - `package.json`（dist スクリプト追加）
-  - `README.md`（サーバ推論時の注意追記）
-  - `.gitignore`（`scripts/profile-report.json` 追加）
-  - `.spec/TODO.md`（Phase 5/6 該当項目チェック）
-  - `.spec/KNOWLEDGE.md`（Phase 6 学び追記）
-  - `.agents/handoff/HANDOFF.md`（本ファイル・旧は `2026-07-20-0129.md` にアーカイブ）
-
-### 配布 zip の中身（0.05 MB）
+### Git 履歴（直近3件）
 
 ```
-manifest.json, index.html, package.json, package-lock.json
-README.md, USER-GUIDE.md, LICENSE, NOTICE
-assets/logo.png
-src/ (9 files: downloader, eagle-bridge, inference, inference-client,
-              main, preprocess, settings, tags, ui)
-server/ (main.py, model_loader.py, preprocess.py, README.md,
-         requirements.txt, tests/test_api.py, .gitignore)
+d62fb61 docs(memory): Windows junction 削除時の事故と対策を追記 (#2)
+99e4510 feat(phase6): 配布 zip ビルダ + プロファイリング拡張 (#1)
+1915fdd docs: HANDOFF.md + MEMORY.md をセッション内容で更新
 ```
+
+### worktree 状態
+
+**なし**（クリーンアップ済み）。すべて main で作業完了。
 
 ## 次のセッションで最初にやること
 
-1. **Phase 6 残作業をユーザーと完結**:
-   - 100枚画像バッチでプロファイリング安定性検証
-   - クリーン環境（別ユーザー/別マシン）で配布 zip を展開 → 初回起動 → タグ付け完結
-2. **Phase 6 コミット & PR 作成**:
-   - `phase6/distribution-prep` ブランチでコミット
-   - PR 作成・bot レビュー取得（`get_reviews` / `get_review_comments` / `get_comments` / `issue_read get_comments` の全4 endpoint 消化）
-3. **マージ後の片付け**:
-   - `gh pr merge --squash --delete-branch`
-   - `git fetch --prune`
-   - `git worktree remove ../EagleOppaiTagger-phase6`
-   - `git branch -d phase6/distribution-prep`
-4. **Phase 9b（任意）**: 自宅サーバでの実環境検証
+### 優先度順
 
-## 試したこと・結果
+1. **クリーン環境検証**（ユーザー作業）— Phase 6 真残作業
+   - 別マシン/別ユーザーで配布 zip（`npm run dist` で生成）を展開
+   - 初回起動 → モデル DL → タグ付け完結まで検証
+   - 手順: USER-GUIDE.md §C（プラグイン登録）〜 §D（モデル DL + 実推論）
 
-### 成功したアプローチ（本セッション）
+2. **Eagle 実機での100枚バッチ進捗バー検証**（ユーザー作業）
+   - 100枚画像を選択 → プラグイン実行 → 進捗バーが滑らかに動くか確認
+   - ロジックは1枚でも100枚でも同じ（コードレビュー済み）だが、実機描画で確認が必要
+
+3. **Phase 9b（任意）**: 自宅サーバでの実環境検証
+   - USER-GUIDE.md §F の手順に従う
+   - `server/` で FastAPI 起動 → GPU 認識確認 → プラグインから `/infer` 経由で推論
+   - ローカルフォールバック動作確認
+
+## 試したこと・結果（前回セッション）
+
+### 成功したアプローチ
 - **サンプル3枚でのプロファイリング**: 100枚は無理だが、DoD「1枚5秒以内 / 2.5GB以下」は3枚で検証可能
+- **102枚ロングラン**（3枚×34回・5分連続）: メモリリークなし・エラー0
 - **PowerShell Compress-Archive の互換性**: `-LiteralPath "x/*"` は PS 5.x でエラー → `Push-Location` + `-Path "*"` で回避
-- **allowlist 方式の配布 zip**: denylist より安全。含めたいものだけを明示
+- **allowlist 方式の配布 zip**: denylist より安全
+- **Copilot レビュー3件対応**: すべて即日修正・両 PS バージョンで動作確認
+
+### 失敗したアプローチ（教訓化済み）
+- **Windows junction 削除**: `rmdir` で worktree 内 junction を削除したら main の `node_modules/jimp` が消失。`npm install` で5秒復元。→ MEMORY.md に記録
 
 ## 注意点・ブロッカー
 
-- **100枚バッチ・クリーン環境検証**: ユーザー手動作業が必要
+- **クリーン環境検証**: 物理的に別マシン/別ユーザーが必要（自分では実施不可）
+- **Eagle 実機100枚**: Eagle アプリと100枚の画像が必要（自分では実施不可）
 - **プロファイリングレポート**: `scripts/profile-report.json` は `.gitignore` 済み（再生成可能）
 - **配布 zip**: `dist/` も `.gitignore` 済み（`*.zip` でカバー）
-- **Phase 6 DoD 残り**: クリーン環境検証が残るため、Phase 完了宣言はまだできない
+
+## ADR 候補
+
+今回のセッションで新規の ADR 候補は特になし。既存 ADR-1〜10 でカバー済み。
+
+ただし、**main 直 commit の例外**（本更新）はルール逸脱だが「軽微なドキュメント更新・ユーザー明示指示」のため ADR 起票対象外と判断。
