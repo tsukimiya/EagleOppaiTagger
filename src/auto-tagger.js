@@ -105,18 +105,28 @@ async function tick() {
     if (state.lastScanAt == null) state.lastScanAt = Date.now();
 
     // Step B: 新規候補抽出（modifiedAt > lastScanAt）
+    // Copilot 指摘対応: modifiedAt 降順で最新から取得し、タグ編集等の
+    // ノイズを除外するため、取得後に tags.length === 0 でフィルタする。
     let newItems = [];
     try {
       const all = await getIdsWithModifiedAt();
       const newIds = all
-        .filter((it) => it && it.modifiedAt > state.lastScanAt)
-        .map((it) => it.id)
-        .slice(0, NEW_ITEM_CAP);
+        .filter(
+          (it) =>
+            it &&
+            typeof it.modifiedAt === "number" &&
+            it.modifiedAt > state.lastScanAt
+        )
+        .sort((a, b) => b.modifiedAt - a.modifiedAt) // 新しい順
+        .slice(0, NEW_ITEM_CAP)
+        .map((it) => it.id);
       if (newIds.length > 0) {
-        newItems = await getItems({
+        const fetched = await getItems({
           ids: newIds,
           fields: ["id", "name", "filePath", "tags", "importedAt"],
         });
+        // 手動タグ編集された画像を弾くため、未タグ付けのみ残す
+        newItems = fetched.filter((it) => !it.tags || it.tags.length === 0);
       }
     } catch (err) {
       // getIdsWithModifiedAt は Build12+ 必須。失敗時は新規検知をスキップして
@@ -125,6 +135,9 @@ async function tick() {
     }
 
     // Step C: 既存の未タグ付け候補
+    // Copilot 指摘対応: importedAt 降順でソートし、新規に近い順に処理する。
+    // 1 tick = 1枚のため、lastScanAt が前進しても残りの新規画像が
+    // 古い未タグ付け画像の後ろに埋もれないようにする。
     let untaggedItems = [];
     try {
       untaggedItems = await getUntagged([
@@ -134,6 +147,9 @@ async function tick() {
         "tags",
         "importedAt",
       ]);
+      untaggedItems.sort(
+        (a, b) => (b.importedAt || 0) - (a.importedAt || 0)
+      );
     } catch (err) {
       console.warn("[auto-tagger] getUntagged failed:", err.message);
     }
@@ -256,8 +272,17 @@ function start(options) {
     tick().catch((err) => {
       console.error("[auto-tagger] tick crashed:", err);
     });
-  }, Math.max(5, intervalSec) * 1000);
+  }, clampIntervalSec(intervalSec) * 1000);
   return true;
+}
+
+/**
+ * SPEC §15.1 で定める 30〜300 秒のレンジに収める。
+ * 不正な保存設定や手動編集で範囲外の値が入っても安全に動作させるため。
+ */
+function clampIntervalSec(sec) {
+  const n = typeof sec === "number" && Number.isFinite(sec) ? sec : 45;
+  return Math.max(30, Math.min(300, Math.floor(n)));
 }
 
 /**

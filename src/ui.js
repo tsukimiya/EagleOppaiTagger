@@ -121,10 +121,11 @@
     for (var i = 0; i < mergeRadios.length; i++) if (mergeRadios[i].checked) { strategy = mergeRadios[i].value; break; }
     var bl = blacklistInput.value.trim(); bl = bl ? bl.split(",").map(function(s){return s.trim()}).filter(Boolean) : [];
     // Phase 10: 自動モード設定を読み取り
+    // SPEC §15.1: ポーリング間隔は 30〜300 秒。index.html の range min/max と一致させる。
     var pollInterval = DEFAULTS.autoMode.pollIntervalSec;
     if (autoIntervalInput) {
       var pi = parseInt(autoIntervalInput.value, 10);
-      if (!isNaN(pi) && pi >= 5) pollInterval = pi;
+      if (!isNaN(pi) && pi >= 30 && pi <= 300) pollInterval = pi;
     }
     var maxErr = DEFAULTS.autoMode.maxConsecutiveErrors;
     if (autoMaxErrorsInput) {
@@ -207,6 +208,11 @@
   // --- Phase 10: 自動モード ----------------------------------------------
   // 進捗 / 警告ハンドラは auto-tagger.js から遅延 require したインスタンスに渡す。
   // main.js と同様、<script> で直接読み込まず遅延 require で crash-safe に。
+  //
+  // 注意: Eagle renderer では __dirname は「プロジェクトルート」を指す
+  // （src/ ではない。MEMORY.md の Eagle Plugin require パスの罠参照）。
+  // そのため `path.join(__dirname, "src", "auto-tagger")` で解決する。
+  // 既存コード（main.js require など）も同じパターン。
   var autoTagger = null;
   try {
     var autoPath = require("path").join(__dirname || "", "src", "auto-tagger");
@@ -239,6 +245,9 @@
     autoStatusEl.textContent = "停止: " + (w.message || w.reason || "");
     autoStatusEl.style.color = "#ca4";
     if (autoEnabledCheckbox) autoEnabledCheckbox.checked = false;
+    // Copilot 指摘対応: localStorage 側の autoMode.enabled も false に更新
+    // （次回ウィンドウ再オープンで「自動停止したはずが再開する」のを防ぐ）
+    onSettingsChanged();
     if (autoStatusRow) autoStatusRow.style.display = "block";
   }
 

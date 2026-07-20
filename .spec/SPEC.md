@@ -790,7 +790,7 @@ EagleOppaiTagger/
 **In Scope（Phase 10）**:
 
 - 自動モード ON/OFF トグル（デフォルト **OFF**）
-- ポーリング間隔: デフォルト **45秒**（30〜60秒をユーザー設定可）
+- ポーリング間隔: デフォルト **45秒**（30〜300秒をユーザー設定可）
 - 新規画像検知: `eagle.item.getIdsWithModifiedAt()` で差分抽出 → `importedAt > lastScanAt` で新規判定
 - 既存画像のアイドル処理: `eagle.item.get({ isUntagged: true })`
 - **処理優先度**: 新規画像を先に、次いで既存の未タグ付け画像
