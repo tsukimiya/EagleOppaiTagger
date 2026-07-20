@@ -71,60 +71,79 @@ async function inferDispatch(item, settings) {
 async function run(onProgress) {
   cancelRequested = false;
 
-  const settings = loadSettings();
-  const blacklist = new Set(settings.blacklist || []);
-  const items = await getSelectedItems();
-  const total = items.length;
-
-  for (let i = 0; i < items.length; i++) {
-    if (cancelRequested) {
-      if (typeof onProgress === "function") {
-        onProgress({ current: i, total, status: "cancelled" });
-      }
-      break;
+  // Phase 10: 手動実行中は自動タグ付けを一時停止（排他制御）。
+  // 遅延 require で循環 import を回避（auto-tagger が main を require するため）。
+  let autoTagger = null;
+  try {
+    autoTagger = require(path.join(srcdir, "auto-tagger"));
+    if (autoTagger && typeof autoTagger.pauseForManualRun === "function") {
+      autoTagger.pauseForManualRun();
     }
+  } catch (_e) {
+    autoTagger = null; // auto-tagger.js が存在しなくても手動実行は動く
+  }
 
-    const item = items[i];
-    try {
-      if (typeof onProgress === "function") {
-        onProgress({
-          current: i + 1,
-          total,
-          fileName: item.name,
-          status: "processing",
-        });
+  try {
+    const settings = loadSettings();
+    const blacklist = new Set(settings.blacklist || []);
+    const items = await getSelectedItems();
+    const total = items.length;
+
+    for (let i = 0; i < items.length; i++) {
+      if (cancelRequested) {
+        if (typeof onProgress === "function") {
+          onProgress({ current: i, total, status: "cancelled" });
+        }
+        break;
       }
 
-      const { probs, source } = await inferDispatch(item, settings);
-      const predicted = probsToTags(probs, {
-        threshold: settings.threshold,
-        maxTags: settings.maxTags,
-        blacklist,
-      });
+      const item = items[i];
+      try {
+        if (typeof onProgress === "function") {
+          onProgress({
+            current: i + 1,
+            total,
+            fileName: item.name,
+            status: "processing",
+          });
+        }
 
-      item.tags = mergeTags(item.tags || [], predicted, settings.mergeStrategy);
-      await saveItem(item);
+        const { probs, source } = await inferDispatch(item, settings);
+        const predicted = probsToTags(probs, {
+          threshold: settings.threshold,
+          maxTags: settings.maxTags,
+          blacklist,
+        });
 
-      if (typeof onProgress === "function") {
-        onProgress({
-          current: i + 1,
-          total,
-          fileName: item.name,
-          status: "done",
-          tags: predicted,
-          source,
-        });
+        item.tags = mergeTags(item.tags || [], predicted, settings.mergeStrategy);
+        await saveItem(item);
+
+        if (typeof onProgress === "function") {
+          onProgress({
+            current: i + 1,
+            total,
+            fileName: item.name,
+            status: "done",
+            tags: predicted,
+            source,
+          });
+        }
+      } catch (err) {
+        if (typeof onProgress === "function") {
+          onProgress({
+            current: i + 1,
+            total,
+            fileName: item.name,
+            status: "error",
+            error: err.message,
+          });
+        }
       }
-    } catch (err) {
-      if (typeof onProgress === "function") {
-        onProgress({
-          current: i + 1,
-          total,
-          fileName: item.name,
-          status: "error",
-          error: err.message,
-        });
-      }
+    }
+  } finally {
+    // 手動実行終了時に自動タグ付けを resume
+    if (autoTagger && typeof autoTagger.resumeAfterManualRun === "function") {
+      autoTagger.resumeAfterManualRun();
     }
   }
 }

@@ -30,6 +30,18 @@
   var fallbackOnErrorCheckbox = document.getElementById("fallback-on-error");
   var serverStatusEl = document.getElementById("server-status");
 
+  // --- Phase 10: 自動モード DOM 参照 -------------------------------------
+  var autoEnabledCheckbox = document.getElementById("auto-enabled");
+  var autoIntervalInput = document.getElementById("auto-interval");
+  var autoIntervalVal = document.getElementById("auto-interval-val");
+  var autoMaxErrorsInput = document.getElementById("auto-max-errors");
+  var autoStatusRow = document.getElementById("auto-status-row");
+  var autoStatusEl = document.getElementById("auto-status");
+  var autoNsfwOverlay = document.getElementById("auto-nsfw-warning");
+  var autoNsfwDismiss = document.getElementById("auto-nsfw-dismiss");
+  var autoNsfwCancel = document.getElementById("auto-nsfw-cancel");
+  var autoNsfwOk = document.getElementById("auto-nsfw-ok");
+
   // --- イベントリスナー登録 (最優先・crash-safe) --------------------------
   runBtn.addEventListener("click", function () {
     console.log("[ui] run clicked");
@@ -66,8 +78,14 @@
   });
 
   // --- 設定の簡易 load/save (settings.js 非依存) -------------------------
-  var DEFAULTS = { threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [], useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true };
+  var DEFAULTS = {
+    threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+    useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+    // Phase 10: 自動モード設定（SPEC §15.5）
+    autoMode: { enabled: false, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+  };
   var SETTINGS_KEY = "eagle-oppai-tagger:settings";
+  var AUTO_NSFW_KEY = "eagle-oppai-tagger:auto-nsfw-dismissed";
 
   function loadSettingsSafe() {
     try { var raw = localStorage.getItem(SETTINGS_KEY); return raw ? Object.assign({}, DEFAULTS, JSON.parse(raw)) : DEFAULTS; }
@@ -88,6 +106,12 @@
     if (useServerCheckbox) useServerCheckbox.checked = !!settings.useServer;
     if (serverUrlInput) serverUrlInput.value = settings.serverUrl || "";
     if (fallbackOnErrorCheckbox) fallbackOnErrorCheckbox.checked = settings.fallbackOnError !== false;
+    // Phase 10: 自動モード
+    var am = settings.autoMode || {};
+    if (autoEnabledCheckbox) autoEnabledCheckbox.checked = !!am.enabled;
+    if (autoIntervalInput) autoIntervalInput.value = am.pollIntervalSec || 45;
+    if (autoIntervalVal) autoIntervalVal.textContent = String(am.pollIntervalSec || 45);
+    if (autoMaxErrorsInput) autoMaxErrorsInput.value = am.maxConsecutiveErrors || 5;
   }
 
   function readSettingsFromUI() {
@@ -96,11 +120,30 @@
     var strategy = DEFAULTS.mergeStrategy;
     for (var i = 0; i < mergeRadios.length; i++) if (mergeRadios[i].checked) { strategy = mergeRadios[i].value; break; }
     var bl = blacklistInput.value.trim(); bl = bl ? bl.split(",").map(function(s){return s.trim()}).filter(Boolean) : [];
-    return { threshold: Math.max(0,Math.min(1,t)), maxTags: Math.max(1,Math.min(100,m)), mergeStrategy: strategy, blacklist: bl,
-             useServer: useServerCheckbox ? useServerCheckbox.checked : false,
-             serverUrl: serverUrlInput ? serverUrlInput.value.trim() : "",
-             serverTimeoutMs: DEFAULTS.serverTimeoutMs,
-             fallbackOnError: fallbackOnErrorCheckbox ? fallbackOnErrorCheckbox.checked : true };
+    // Phase 10: 自動モード設定を読み取り
+    // SPEC §15.1: ポーリング間隔は 30〜300 秒。index.html の range min/max と一致させる。
+    var pollInterval = DEFAULTS.autoMode.pollIntervalSec;
+    if (autoIntervalInput) {
+      var pi = parseInt(autoIntervalInput.value, 10);
+      if (!isNaN(pi) && pi >= 30 && pi <= 300) pollInterval = pi;
+    }
+    var maxErr = DEFAULTS.autoMode.maxConsecutiveErrors;
+    if (autoMaxErrorsInput) {
+      var me = parseInt(autoMaxErrorsInput.value, 10);
+      if (!isNaN(me) && me >= 1) maxErr = me;
+    }
+    var amEnabled = autoEnabledCheckbox ? !!autoEnabledCheckbox.checked : false;
+    return {
+      threshold: Math.max(0,Math.min(1,t)),
+      maxTags: Math.max(1,Math.min(100,m)),
+      mergeStrategy: strategy,
+      blacklist: bl,
+      useServer: useServerCheckbox ? useServerCheckbox.checked : false,
+      serverUrl: serverUrlInput ? serverUrlInput.value.trim() : "",
+      serverTimeoutMs: DEFAULTS.serverTimeoutMs,
+      fallbackOnError: fallbackOnErrorCheckbox ? fallbackOnErrorCheckbox.checked : true,
+      autoMode: { enabled: amEnabled, pollIntervalSec: pollInterval, maxConsecutiveErrors: maxErr },
+    };
   }
 
   function onSettingsChanged() { settings = readSettingsFromUI(); saveSettingsSafe(settings); thresholdVal.textContent = settings.threshold.toFixed(2); }
@@ -162,7 +205,120 @@
     serverStatusEl.textContent = "接続テスト未実装（renderer 制約）"; serverStatusEl.style.color = "#ca4";
   });
 
-  // --- NSFW 警告 ----------------------------------------------------------
+  // --- Phase 10: 自動モード ----------------------------------------------
+  // 進捗 / 警告ハンドラは auto-tagger.js から遅延 require したインスタンスに渡す。
+  // main.js と同様、<script> で直接読み込まず遅延 require で crash-safe に。
+  //
+  // 注意: Eagle renderer では __dirname は「プロジェクトルート」を指す
+  // （src/ ではない。MEMORY.md の Eagle Plugin require パスの罠参照）。
+  // そのため `path.join(__dirname, "src", "auto-tagger")` で解決する。
+  // 既存コード（main.js require など）も同じパターン。
+  var autoTagger = null;
+  try {
+    var autoPath = require("path").join(__dirname || "", "src", "auto-tagger");
+    autoTagger = require(autoPath);
+  } catch (e) {
+    console.warn("[ui] auto-tagger.js not loaded:", e.message);
+    autoTagger = null;
+  }
+
+  function autoOnProgress(ev) {
+    if (!autoStatusEl) return;
+    if (ev.status === "processing") {
+      var kind = ev.isNew ? "新規" : "未タグ付け";
+      autoStatusEl.textContent = "処理中 (" + kind + "): " + (ev.fileName || "") + " / 残り " + (ev.queueSize || 0);
+      autoStatusEl.style.color = "#8cf";
+    } else if (ev.status === "done") {
+      var s = autoTagger ? autoTagger.getState() : null;
+      var nc = s ? s.processedNewCount : 0;
+      var uc = s ? s.processedUntaggedCount : 0;
+      autoStatusEl.textContent = "新規 " + nc + " / 未タグ付け " + uc + " 処理済み: " + (ev.fileName || "");
+      autoStatusEl.style.color = "#4a7";
+    } else if (ev.status === "error") {
+      autoStatusEl.textContent = "エラー: " + (ev.fileName || "") + " - " + (ev.error || "") + " (連続 " + (ev.consecutiveErrors || 0) + ")";
+      autoStatusEl.style.color = "#a44";
+    }
+  }
+
+  function autoOnWarning(w) {
+    if (!autoStatusEl) return;
+    autoStatusEl.textContent = "停止: " + (w.message || w.reason || "");
+    autoStatusEl.style.color = "#ca4";
+    if (autoEnabledCheckbox) autoEnabledCheckbox.checked = false;
+    // Copilot 指摘対応: localStorage 側の autoMode.enabled も false に更新
+    // （次回ウィンドウ再オープンで「自動停止したはずが再開する」のを防ぐ）
+    onSettingsChanged();
+    if (autoStatusRow) autoStatusRow.style.display = "block";
+  }
+
+  function autoStart() {
+    if (!autoTagger) { console.warn("[ui] auto-tagger unavailable"); return; }
+    var s = loadSettingsSafe();
+    autoTagger.start({
+      settings: s,
+      onProgress: autoOnProgress,
+      onWarning: autoOnWarning,
+    });
+    if (autoStatusRow) autoStatusRow.style.display = "block";
+    if (autoStatusEl) {
+      autoStatusEl.textContent = "自動モード動作中";
+      autoStatusEl.style.color = "#4a7";
+    }
+  }
+
+  function autoStop() {
+    if (!autoTagger) return;
+    autoTagger.stop();
+    if (autoStatusEl) {
+      autoStatusEl.textContent = "停止中";
+      autoStatusEl.style.color = "#aaa";
+    }
+  }
+
+  // ポーリング間隔スライダー: 値表示 + 設定保存
+  if (autoIntervalInput) {
+    autoIntervalInput.addEventListener("input", function () {
+      if (autoIntervalVal) autoIntervalVal.textContent = autoIntervalInput.value;
+      onSettingsChanged();
+    });
+  }
+  if (autoMaxErrorsInput) {
+    autoMaxErrorsInput.addEventListener("input", onSettingsChanged);
+  }
+
+  // 自動モード チェックボックス: ON 時は NSFW 警告 → start、OFF 時は stop
+  if (autoEnabledCheckbox) autoEnabledCheckbox.addEventListener("change", function () {
+    onSettingsChanged();
+    if (autoEnabledCheckbox.checked) {
+      // 初回 ON 時は NSFW 警告ダイアログ
+      var dismissed = false;
+      try { dismissed = localStorage.getItem(AUTO_NSFW_KEY) === "1"; } catch (_) {}
+      if (!dismissed && autoNsfwOverlay) {
+        autoNsfwOverlay.classList.add("show");
+        // ダイアログのボタン処理で最終的に start するか cancel するか決定
+      } else {
+        autoStart();
+      }
+    } else {
+      autoStop();
+    }
+  });
+
+  // 自動モード NSFW 警告ダイアログ
+  if (autoNsfwOk) autoNsfwOk.addEventListener("click", function () {
+    if (autoNsfwDismiss && autoNsfwDismiss.checked) {
+      try { localStorage.setItem(AUTO_NSFW_KEY, "1"); } catch (_) {}
+    }
+    if (autoNsfwOverlay) autoNsfwOverlay.classList.remove("show");
+    autoStart();
+  });
+  if (autoNsfwCancel) autoNsfwCancel.addEventListener("click", function () {
+    if (autoEnabledCheckbox) autoEnabledCheckbox.checked = false;
+    onSettingsChanged();
+    if (autoNsfwOverlay) autoNsfwOverlay.classList.remove("show");
+  });
+
+  // --- NSFW 警告（手動実行用） -------------------------------------------
   var NSFW_KEY = "eagle-oppai-tagger:nsfw-dismissed";
   if (nsfwOk) nsfwOk.addEventListener("click", function () {
     if (nsfwDismiss && nsfwDismiss.checked) { try { localStorage.setItem(NSFW_KEY, "1"); } catch (_) {} }
@@ -171,9 +327,18 @@
 
   // --- 初期化 -------------------------------------------------------------
   populateUI();
-  console.log("[ui] initialized — run/cancel listeners registered");
+  console.log("[ui] initialized — run/cancel/auto-mode listeners registered");
 
-  // NSFW 初回警告
+  // NSFW 初回警告（手動実行）
   try { if (localStorage.getItem(NSFW_KEY) !== "1" && nsfwOverlay) nsfwOverlay.classList.add("show"); } catch (_) {}
+
+  // Phase 10: 設定で自動モード ON なら起動時に開始
+  try {
+    var initSettings = loadSettingsSafe();
+    if (initSettings.autoMode && initSettings.autoMode.enabled && autoEnabledCheckbox) {
+      // UI 復元後、チェックボックスは既に populateUI() で ON になっている
+      autoStart();
+    }
+  } catch (_) {}
 
 })();
