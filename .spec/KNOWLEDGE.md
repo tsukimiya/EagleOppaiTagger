@@ -212,3 +212,46 @@
 
 - 100枚バッチでの安定性検証（統計的有意性・長時間実行・進捗バー滑らかさ）
 - クリーン環境（別ユーザー/別マシン）での配布 zip 展開 → 初回起動 → タグ付け完結検証
+
+## Phase 10 — 自動タグ付け（Window 内自動化・2026-07-20）
+
+### v3 PLAN の前提修正
+
+v3 PLAN/SPEC は「Event API に `onItemAdd` が無いため自動タグ付けは不可」としていたが、公式 doc の再調査で以下が判明:
+
+- **Background Service Plugin 型**（`manifest.json` で `"main": { "serviceMode": true }`）が公式サポート
+- Event API は `onItemAdd` 無し・`onPluginCreate` / `onLibraryChanged` 等のみ
+- しかし `eagle.item.getIdsWithModifiedAt()`（Build12+）で id + modifiedAt の高速取得が可能 → 差分検知でポーリング実装可能
+- `eagle.item.get({ isUntagged: true })` で未タグ付け抽出
+- 結論: v4 Phase 10 として Window プラグイン内ポーリングで実現（Service 化は Phase 11 で検討）
+
+### 設計判断（ユーザー合意）
+
+- 1 tick = 1枚処理（Eagle 本体への負荷分散・「アイドル感」を保つ）
+- 新規優先 → 既存の未タグ付け（新規は modifiedAt > lastScanAt、取得後に `tags.length === 0` でクライアント側フィルタ）
+- エラー耐性: スキップ + 連続5回で自動停止
+- 排他制御: 手動 `run()` 実行中は auto-tagger を pause / finally で resume（循環 import 回避のため main.js 側で遅延 require）
+
+### 実装上の工夫
+
+- **`??` 演算子の使用**: `start()` で `loadLastScanAt() ?? Date.now()`。`||` だと `0` が falsy 扱いで Date.now() に上書きされてしまう。Node 16.17.1 は ES2020 対応なので `??` が使える
+- **auto-tagger と main.js の循環参照**: auto-tagger.js → main.js（inferDispatch を使うため）、main.js → auto-tagger.js（排他のため）。ロード時の循環を避けるため、両者とも関数内で遅延 require
+- **inTick ガード**: setInterval は async 関数の完了を待たない。tick 内部の冒頭で `if (state.inTick) return` を入れることで再入を防止
+- **連続エラー後の localStorage 整合**: UI 側で checkbox を OFF にするだけでは localStorage の `autoMode.enabled` が古いまま。`onSettingsChanged()` を呼んで永続化（Copilot レビューで指摘）
+
+### Copilot レビューで改善した点
+
+1. **新規候補の精度**: modifiedAt 降順ソート後 cap（最新が落ちない）+ 取得後に `tags.length === 0` でクライアントフィルタ（タグ編集された画像を「新規」として誤処理しない）
+2. **新規優先の維持**: `getUntagged()` の結果を importedAt 降順でソート。1 tick = 1枚 + lastScanAt 更新で残新規画像が古い未タグ付けに埋もれる問題を回避
+3. **ポーリング間隔の clamp**: `clampIntervalSec()` ヘルパで `Math.max(30, Math.min(300, sec))`。UI / SPEC / auto-tagger の3箇所で 30-300 秒に統一
+4. **UI 設定の下限チェック**: `readSettingsFromUI()` で `pi >= 30 && pi <= 300` に厳格化
+
+### ADR 候補（Phase 10 関連）
+
+- **ADR-11 候補**: 自動タグ付けは Background Service 型ではなく Window 内ポーリング（Phase 10）で段階導入
+  - 理由: Service 化は「ウィンドウ閉じても動く」メリットがあるが、NSFW タグの無人付与リスク・メモリ常駐・Eagle アプリとのリソース競合を先に検証すべき。Window 内ならユーザーが「今このライブラリに対して動かしている」状態を保てる
+  - 見直し条件: Phase 10 の実機検証で「ウィンドウを開きっぱなしにする運用で十分」と判明すれば Service 化不要。逆に「ウィンドウ閉じても動かしたい」要望が強ければ Phase 11 に進む
+
+### 残作業（ユーザー環境依存）
+
+- Eagle 実機での Phase 10 DoD §15.9 検証（自動モード ON → 新規画像追加 → 60秒以内タグ付与、連続エラー停止、手動との排他など）

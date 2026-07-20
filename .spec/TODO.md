@@ -222,39 +222,41 @@
 
 > SPEC §15 参照。Phase 11 で Background Service 化（`serviceMode: true`）を検討。
 
-- [ ] `src/settings.js` に `autoMode` 設定追加（enabled / pollIntervalSec / maxConsecutiveErrors）
-- [ ] `src/eagle-bridge.js` にラッパー追加:
+- [x] `src/settings.js` に `autoMode` 設定追加（enabled / pollIntervalSec / maxConsecutiveErrors）
+- [x] `src/eagle-bridge.js` にラッパー追加:
   - `getIdsWithModifiedAt()`
   - `getUntagged(fields)`
   - `countUntagged()`
-- [ ] `src/auto-tagger.js` を新規実装:
-  - `start()` / `stop()` / `isRunning()`
+  - `getItems(options)`（汎用検索・Phase 10 で追加）
+- [x] `src/auto-tagger.js` を新規実装:
+  - `start()` / `stop()` / `isRunning()` / `getState()`
   - setInterval ベースのポーリングループ
   - 新規画像 → 既存未タグ付けの優先度付きキュー
   - `lastScanAt` の localStorage 読み書き
   - 連続エラーカウント + 自動停止
   - `pauseForManualRun()` / `resumeAfterManualRun()`（排他制御）
-- [ ] `src/main.js` に排他制御追加:
+  - Copilot レビュー指摘対応: modifiedAt 降順 + cap、tags.length===0 フィルタ、importedAt 降順ソート、間隔 clamp 30-300秒
+- [x] `src/main.js` に排他制御追加:
   - `run()`（手動）開始時: 自動ループを一時停止
   - `run()` 終了時: 自動ループを resume
-- [ ] `src/ui.js` に自動モード UI イベント追加:
+- [x] `src/ui.js` に自動モード UI イベント追加:
   - トグル・間隔スライダー・状態表示
   - 初回 ON 時の NSFW 警告（別キー）
-  - 連続エラー停止時の表示
-- [ ] `index.html` に自動モード セクション追加
-- [ ] `src/phase10-test.js` を新規実装:
+  - 連続エラー停止時の表示と設定の localStorage 反映
+- [x] `index.html` に自動モード セクション + 専用 NSFW 警告ダイアログ追加
+- [x] `src/phase10-test.js` を新規実装（71 tests PASS）:
   - ポーリングロジック（モック Eagle API）
   - 新規 vs 既存の優先度
   - 連続エラー停止
   - 手動との排他
   - lastScanAt の永続化
-- [ ] **DoD**: 自動モード OFF（デフォルト）→ 何も起きない
-- [ ] **DoD**: 自動モード ON → 新規画像を追加 → 60秒以内にタグ付与
-- [ ] **DoD**: 既存の未タグ付け画像が順次タグ付けされる
-- [ ] **DoD**: 手動「実行」中は自動ポーリングが一時停止する
-- [ ] **DoD**: プラグインウィンドウを閉じて再び開くと resume する
-- [ ] **DoD**: 連続5回エラーで自動停止 + UI に理由表示
-- [ ] **DoD**: 既存テスト（87+ tests）が全て PASS（回帰なし）
+- [x] **DoD**: 自動モード OFF（デフォルト）→ 何も起きない（実装・テストで検証）
+- [ ] **DoD**: 自動モード ON → 新規画像を追加 → 60秒以内にタグ付与（※ユーザー実機検証待ち）
+- [ ] **DoD**: 既存の未タグ付け画像が順次タグ付けされる（※ユーザー実機検証待ち）
+- [ ] **DoD**: 手動「実行」中は自動ポーリングが一時停止する（※ユーザー実機検証待ち）
+- [ ] **DoD**: プラグインウィンドウを閉じて再び開くと resume する（※ユーザー実機検証待ち）
+- [ ] **DoD**: 連続5回エラーで自動停止 + UI に理由表示（※ユーザー実機検証待ち）
+- [x] **DoD**: 既存テスト（phase2/3/4/5/8/9: 172 tests + phase10: 71 tests = 計 243+ tests）が全て PASS（回帰なし）
 
 ---
 

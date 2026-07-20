@@ -5,64 +5,103 @@
 ## Eagle Plugin Renderer の制約と対策
 
 ### require パス解決の罠（最重要）
-- Eagle は `require()` をラップしており、**相対パスが Eagle 自身の内部ディレクトリ基準で解決される**
-- `require("./preprocess")` → `E:\My Programs\Eagle\resources\app.asar\app\js\plugin\preprocess` を探しに行く
+- Eagle renderer では `require()` がラップされており、**相対パスが Eagle 内部ディレクトリ基準で解決される**
+- `__dirname` は **src/ ではなくプロジェクトルート** を指す（HTML の `<script src="src/ui.js">` で読む場合）
+- CommonJS の通常挙動（`__dirname` = そのファイルのディレクトリ）と異なる特殊仕様
 - **対策**: 常に絶対パス `path.join(__dirname, "src", "モジュール名")` を使う
-- `__dirname` はプロジェクトルートを指す（`src/` ではない！）
+- 子 require 先（例: main.js を ui.js から require した場合の main.js 内の `__dirname`）は通常通り「そのファイルの実ディレクトリ」
 
 ### スクリプト読み込み順序
 - HTML の `<script>` は逐次実行。先に読むスクリプトが例外を投げると後続は一切実行されない
 - `main.js`（require チェーンが長い）を `<script>` で直接読み込まず、ui.js のみ読み込んで他は遅延 require
 
 ### 使える API / 使えない API（Eagle renderer）
-- ✅ `require("onnxruntime-node")` — 動作確認済み（B1 スパイク）
-- ✅ `require("jimp")` — 動作確認済み（B1 スパイク）
-- ✅ `require("fs")` — **使える**（公式 doc + 実プラグインで確認）
-- ✅ `require("https")` — **使える**（公式 doc にサンプルあり）
-- ✅ `localStorage` — 使える（設定 UI で動作確認）
-- ✅ `window.fetch` — Chromium 標準 API
+- ✅ `require("onnxruntime-node")` / `require("jimp")` / `require("fs")` / `require("https")`
+- ✅ `localStorage` / `window.fetch` / `eagle.*` Plugin API
+- ✅ `eagle.item.getIdsWithModifiedAt()` / `eagle.item.get({isUntagged:true})` / `count()` （Build12+）
 
 ### HTML ボタン表示の罠
-- `style="display:none"` のインラインスタイルは、JS からの `style.display=""` では解除されないことがある
-- 信頼できる方法: `removeAttribute("style")` または `style.display = "inline-block"` を明示
-- 最も確実: ボタンはデフォルト表示にして、非表示にしたい時だけ JS で隠す
+- `style="display:none"` インラインは JS からの `style.display=""` で解除されないことがある
+- **対策**: `removeAttribute("style")` または明示的な `style.display = "inline-block"`
+
+## Eagle Plugin API の自動タグ付け（Phase 10 で検証済み）
+
+### Event API の実態
+- `onItemAdd` は**存在しない**（新規追加のイベントフック無し）
+- あるのは `onPluginCreate` / `onPluginRun` / `onPluginBeforeExit` / `onPluginShow` / `onPluginHide` / `onLibraryChanged` / `onThemeChanged`
+- 新規画像検知は **ポーリング** で実現するしかない
+
+### Background Service Plugin 型
+- `manifest.json` の `main` に `"serviceMode": true` を追加するだけ（公式サポート）
+- Eagle 起動時にバックグラウンドで常駐、ウィンドウも出せる
+- v3 PLAN の「Event API 無しで不可」は誤り。Service 型ありなら常駐可能
+- 公式サンプル: https://github.com/eagle-app/eagle-plugin-examples/tree/main/Service
+
+### 自動タグ付けの設計パターン（Phase 10 採用）
+- **Window 内ポーリング**（`setInterval` + `getIdsWithModifiedAt` 差分）
+- 1 tick = 1枚処理で Eagle 本体への負荷分散
+- 新規候補: `modifiedAt > lastScanAt` で抽出 → `tags.length === 0` でクライアント側フィルタ（タグ編集を巻き込まない）
+- 既存未タグ付け: `get({isUntagged: true})` → `importedAt` 降順で「新規に近い順」を維持
+- 排他制御: 手動 `run()` 中は `pauseForManualRun()` / `resumeAfterManualRun()`（循環 import 回避のため**両方向とも遅延 require**）
+
+## JavaScript の罠
+
+### `||` と `??` の違い（タイムスタンプ取り扱い）
+- `loadLastScanAt() || Date.now()` は **NG**: `0` が falsy 扱いで Date.now() に上書きされる
+- `loadLastScanAt() ?? Date.now()` が **正解**: `0` を正当な値として扱う
+- Node 16.17.1（Eagle 同梱）は ES2020 対応で `??` が使える
+
+### setInterval で async 関数を呼ぶときの再入防止
+- `setInterval` は前回の async 完了を待たずに次を発火する
+- **対策**: ループ内部の冒頭で `if (state.inTick) return;` + finally で解除
+
+### 循環 import の回避（CommonJS）
+- A.js ↔ B.js の相互参照がある場合、両方とも「関数内で遅延 require」すれば OK
+- モジュールロード時の循環は避けられる。実行時には両方ロード済みなので動作する
 
 ## npm セキュリティ（adm-zip CVE-2026-39244）
 - `onnxruntime-node@1.27.0` が依存する `adm-zip@0.5.18` に HIGH 脆弱性
 - **対策**: `package.json` の `overrides` で `"adm-zip": "0.6.0"` を強制注入（API 互換あり）
-- `npm audit fix --force` は onnxruntime-node を 1.21.1 にダウングレードするため禁止
+- `npm audit fix --force` は onnxruntime-node をダウングレードするため禁止
 
 ## Node.js テストで組み込みモジュールをモックする
 - `require.cache[require.resolve("https")] = { loaded: true, exports: fakeHttps }` で差し替え可能
 - 偽レスポンスは EventEmitter ベース。`resume()` / `pipe()` / `destroy()` を実装すること
+- item モックには `async save() {}` を必ず実装する（`saveItem(item)` が呼ぶため）
 
 ## SHA256 プレースホルダー運用
 - モデル実ファイル未 DL 段階ではハッシュを推測してハードコードしない
 - `TO_BE_FILLED_*` プレースホルダーで運用。初回 DL 時に実ハッシュを出力し、ユーザーが手動で追記
 
 ## PowerShell `Compress-Archive` の罠（Phase 6）
-- Windows PowerShell 5.x では `Compress-Archive -LiteralPath "path/*"` が「パスが存在しない」エラーになる（PS 7+ では動く）
-- **対策**: `Push-Location $stagePath` してから `Compress-Archive -Path "*" -DestinationPath $zip` で相対指定する
-- ファイル名のバージョン埋め込みは `manifest.json` を `ConvertFrom-Json` して `$manifest.version` を取得
+- Windows PowerShell 5.x では `Compress-Archive -LiteralPath "path/*"` がエラー（PS 7+ では動く）
+- **対策**: `Push-Location $stagePath` してから `Compress-Archive -Path "*"` で相対指定
+- バージョン埋め込みは `manifest.json` を `ConvertFrom-Json` して `$manifest.version` を取得
 
 ## 配布 zip は allowlist 方式が安全（Phase 6）
-- `node_modules/` `models/` `.git/` `.codegraph/` `.claude/` `.agents/` `.spec/` など除外対象が多数ある場合、denylist は漏れがち
-- **allowlist 方式**（含めるファイルだけ明示）なら漏れなく安全。`src/` 内のテストも `phase*-test.js` / `verify.js` で除外
-- サイズは結果的に 0.05 MB（5MB 目標）になった
+- `node_modules/` `models/` `.git/` `.codegraph/` `.claude/` `.agents/` `.spec/` 等の除外対象が多いと denylist は漏れがち
+- **allowlist 方式**（含めるファイルだけ明示）なら漏れなく安全
+- `src/` 内は `phase*-test.js` / `verify.js` / `.gitkeep` を除外パターンで弾く
+- Phase 10 で追加した `auto-tagger.js` は自動的に含まれる（除外パターンに一致しないため）
 
 ## Windows junction 削除の罠（Phase 6 片付け）
 
-worktree 内に `node_modules` 等の junction（`mklink /J`）がある状態で `git worktree remove --force` すると、junction が削除できず worktree の物理ディレクトリが残る。残ったディレクトリを `rmdir` で掃除しようとすると、**リンク先（main の node_modules）の実体が一部削除されることがある**（今回は `jimp` が消失・`onnxruntime-node` は無事）。
+worktree 内に `node_modules` 等の junction（`mklink /J`）がある状態で `git worktree remove --force` すると junction が削除できず物理ディレクトリが残る。`rmdir` で掃除しようとすると**リンク先（main の node_modules）の実体が削除されることがある**。
 
 **対策**:
-- worktree で `node_modules` 等の巨大ディレクトリを使う際は junction ではなく **`npm install` で別途展開** する（時間はかかるが安全）
-- どうしても junction を使う場合、削除は `cmd /c rmdir <path>`（再帰なし・`/S` 付けない）で慎重に
-- 事故っても `npm install` で即復旧可能（5秒程度）
+- worktree で `node_modules` 等の巨大ディレクトリを使う際は junction ではなく `npm install` で別途展開する（時間はかかるが安全・Phase 10 で採用・8秒で完了）
+- 事故っても `npm install` で即復旧可能
 
-**今回の事象**: Phase 6 worktree（`EagleOppaiTagger-phase6`）の `node_modules` junction を `rmdir` で削除したところ、main の `node_modules/jimp` が消失。`npm install` で即復元。
+## Copilot PR レビューの傾向（Phase 10 で実測）
+
+- 7件の指摘のうち**すべて有効**。Copilot は論理的バグ・一貫性欠如を見つけるのが得意
+- 特に有用だった指摘:
+  - `||` vs `??` 相当の falsy 問題（今回は出なかったが clamp が `Math.max(5,...)` で SPEC 違反）
+  - 複数モジュール間の数値の不一致（UI の min/max vs 設定読み取り vs SPEC）
+  - アルゴリズムの境界ケース（cap の並び替え不足・優先度崩れ）
+- Eagle renderer の `__dirname` 特殊仕様は Copilot には分からないので、コメントか返信で補足説明が必要
 
 ## その他
-- `eagle-bridge.js` は `eagle` グローバルをトップレベルで参照せず、関数内で遅延参照（初期化タイミング問題対策）
-- `inference-client.js` は `require("fs")` をトップレベルで実行せず、関数内で遅延 require（IIFE crash 防止）
+- `eagle-bridge.js` / `inference-client.js` はトップレベルで `eagle` / `require` を参照せず、関数内で遅延参照（初期化タイミング問題対策）
 - プラグイン更新を Eagle に反映させるにはシンボリックリンクを貼り直すのが確実
 - プロファイリングのサンプル数が少なくても「1枚あたり速度・メモリ」の DoD 検証は可能。100枚は統計的有意性と長時間安定性が目的
