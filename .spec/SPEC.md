@@ -1,8 +1,9 @@
-# SPEC — Eagle OppaiOracle Tagger Plugin (v3)
+# SPEC — Eagle OppaiOracle Tagger Plugin (v3 + v4)
 
 > v1 plan (`.sisyphus/plans/eagle-oppai-tagger.md`) の敵対的検証結果を反映した確定版。
 > 検証レポートの blocker / warning / nitpick の反映状況は各セクション末尾に `[- Bn/Wn/Nn]` で明示。
 > v3 で推論サーバ（Python FastAPI + onnxruntime-gpu）経由のアーキテクチャを追加。ローカル推論はフォールバックとして維持。
+> v4（Phase 10）で Window プラグイン内の自動タグ付けモードを追加。Service 化は Phase 11 で検討。
 
 ---
 
@@ -778,8 +779,150 @@ EagleOppaiTagger/
 
 ---
 
+---
+
+## 15. v4: 自動タグ付け（Phase 10 以降の差分）
+
+> v3 に対する追加仕様。Phase 10 は Window プラグイン内の自動化に留め、Background Service 化は Phase 11 で検討する。
+
+### 15.1 スコープ
+
+**In Scope（Phase 10）**:
+
+- 自動モード ON/OFF トグル（デフォルト **OFF**）
+- ポーリング間隔: デフォルト **45秒**（30〜60秒をユーザー設定可）
+- 新規画像検知: `eagle.item.getIdsWithModifiedAt()` で差分抽出 → `importedAt > lastScanAt` で新規判定
+- 既存画像のアイドル処理: `eagle.item.get({ isUntagged: true })`
+- **処理優先度**: 新規画像を先に、次いで既存の未タグ付け画像
+- **処理済み判定**: タグが1つ以上付与された画像（`isUntagged: false` で自然に除外）
+- `lastScanAt` を localStorage に永続化
+- 進捗 UI 統合（既存の progress bar 共用）
+- エラー耐性: **スキップ + 連続エラー閾値**（デフォルト5回で自動停止）
+- 初回 ON 時に NSFW 警告ダイアログ（手動実行の初回警告を別キーで再利用）
+- 手動実行中は自動処理を一時停止（排他制御）
+
+**Out of Scope（Phase 11 以降）**:
+
+- `serviceMode: true` による Background Service 化
+- プラグインウィンドウを閉じても動く常駐動作
+- フォルダ指定・スマートフォルダ連携
+- ログのファイル保存・セッション履歴
+- per-tag 閾値の最適化
+
+### 15.2 制約事項
+
+- プラグインウィンドウを閉じると自動処理も停止する（Service 型ではないため）
+- `onPluginBeforeExit` で `lastScanAt` を保存 → 再び開くと resume
+- 手動「実行」ボタン押下時は自動ループを skip（同時実行しない）
+- 100枚以上の未タグ付け画像がある場合は順次処理（Eagle アプリのパフォーマンスを悪化させないよう、1枚ごとに `await` で明け渡す）
+
+### 15.3 新規 Eagle API 利用（v3 §2.2 に追加）
+
+| API | 用途 | 必須 Build |
+|-----|------|-----------|
+| `eagle.item.getIdsWithModifiedAt()` | 差分同期・新規検知 | Build12+ |
+| `eagle.item.get({ isUntagged: true, fields })` | 未タグ付け画像抽出 | Build12+ |
+| `eagle.item.count({ isUntagged: true })` | 残件数表示 | Build12+ |
+
+### 15.4 ポーリングアルゴリズム
+
+```text
+起動時:
+  1. lastScanAt を localStorage から読込（無ければ Date.now()）
+  2. settings.autoMode.enabled === true ならポーリング開始
+
+setInterval(pollIntervalSec * 1000) の各 tick:
+  Step A: 手動実行中なら何もせず return
+  Step B: 新規候補抽出
+    - eagle.item.getIdsWithModifiedAt()
+    - filter(item => item.importedAt > lastScanAt)
+    - → newQueue
+  Step C: 既存の未タグ付け候補
+    - eagle.item.get({ isUntagged: true, fields: ["id","name","filePath","tags"] })
+    - → untaggedQueue
+  Step D: 優先順位結合
+    - workQueue = [...newQueue, ...untaggedQueue]
+    - 重複除外（id ベース）
+  Step E: 1枚だけ処理（バッチではない）
+    - 推論ルーティング（サーバ優先・フォールバック）は手動と同じ
+    - 成功: consecutiveErrorCount = 0
+    - 失敗: consecutiveErrorCount++ / スキップして次
+    - 連続エラー >= maxConsecutiveErrors → 自動停止 + UI 通知
+  Step F: lastScanAt = Date.now() を localStorage に保存
+```
+
+**tick で1枚だけ処理する理由**: ポーリング間隔を分散させ、Eagle 本体の操作に干渉しないようアイドル感を保つため。大量処理したい場合は手動実行を使う。
+
+### 15.5 設定追加
+
+`src/settings.js` の `DEFAULTS` に追加:
+
+```javascript
+autoMode: {
+  enabled: false,             // デフォルト OFF
+  pollIntervalSec: 45,        // ポーリング間隔（30〜300想定）
+  maxConsecutiveErrors: 5,    // 連続エラー閾値
+}
+```
+
+`lastScanAt` は localStorage の別キー `eagle-oppai-tagger:last-scan-at` に数値タイムスタンプで保存（設定オブジェクトとは分離）。
+
+### 15.6 モジュール構成（追加）
+
+```text
+src/
+├── auto-tagger.js    # 新規: ポーリングループ・状態管理
+├── settings.js       # 変更: autoMode オブジェクト追加
+├── eagle-bridge.js   # 変更: getIdsWithModifiedAt / getUntagged / countUntagged 追加
+├── main.js           # 変更: run() に auto-tagger の pause/resume を組み込み
+├── ui.js             # 変更: 自動モード UI イベント追加
+└── phase10-test.js   # 新規: 自動モードの単体テスト
+```
+
+### 15.7 UI 変更
+
+```text
+設定エリア内に追加:
+  □ 自動モード（プラグインウィンドウを開いている間のみ動作）
+    ポーリング間隔: [=====●==] 45 秒
+    連続エラー上限: 5
+
+進捗エリア（自動モード時の表示）:
+  自動実行中: 新規 3 / 未タグ付け 12 処理済み
+  次回スキャンまで: 23 秒
+  現在処理中: image_001.jpg
+```
+
+- 既存の「実行」ボタンはそのまま（手動実行）
+- 自動モード ON 時の初回警告: NSFW 既存警告を別キー（`eagle-oppai-tagger:auto-nsfw-dismissed`）で管理
+- 自動モードの状態は localStorage に保存（ウィンドウ開き直しで復元）
+
+### 15.8 リスク追加（SPEC §11 に準ずる）
+
+| リスク | 内容 | 対策 |
+|--------|------|------|
+| **自動 NSFW タグ付与** | ユーザー確認なしで NSFW タグが付く可能性 | 初回 ON 時に警告・ブラックリスト設定を推奨表示 |
+| **Eagle パフォーマンス悪化** | 大量画像のポーリングが Eagle 本体に影響 | 1 tick = 1枚処理・`fields` 絞り込み・`count()` で事前判定 |
+| **ユーザーが手動で消したタグの再付与** | ユーザー意図と相反 | ドキュメントで挙動明記・「一時停止」ボタンで回避可 |
+| **ポーリングと手動実行の競合** | 同時実行でリソース競合 | 手動実行中は自動を skip（排他） |
+
+### 15.9 Phase 10 の DoD
+
+- [ ] 自動モード OFF（デフォルト）→ 何も起きない
+- [ ] 自動モード ON → 新規画像を追加 → **60秒以内に**タグが付与される
+- [ ] 既存の未タグ付け画像が順次タグ付けされる（間隔通り）
+- [ ] 手動「実行」中は自動ポーリングが一時停止する
+- [ ] プラグインウィンドウを閉じて再び開くと、`lastScanAt` から resume する
+- [ ] 連続5回エラーで自動停止し、UI に理由が表示される
+- [ ] 自動モード中にユーザーがタグを削除 → 次ポーリングで再タグ付けされる（仕様）
+- [ ] 既存の87+テストが全て PASS（回帰なし）
+- [ ] `phase10-test.js` を新設し、モック Eagle API でポーリングロジックを検証
+
+---
+
 ## 改訂履歴
 
+- **v4** (2026-07-20): Window プラグイン内の自動タグ付けモード（Phase 10）を追加。§15 新設。v3 で「Event API 無し」と保留していた自動タグ付けを、`getIdsWithModifiedAt()` / `get({isUntagged})` によるポーリング方式で実現。Service 化（`serviceMode: true`）は Phase 11 で検討。
 - **v3** (2026-07-19): 推論サーバ（Python FastAPI + onnxruntime-gpu）経由のアーキテクチャを追加。ローカル推論はフォールバックとして維持。§1 スコープ改訂・§2.7/2.8 追加・§3/§4/§5 全面改訂・§7 再構成・§11 リスク追加・§14 技術選定追記。Phase 7-9 追加。ADR-10 追加。
 - **v2** (2026-07-19): B1 スパイク PASS を受けて v1 の敵対的検証指摘（B2-B3 / W1-W8 / N1-N7）を全反映。`.spec/` 配下に移管して SDD フローに合流。
 - **v1** (`.sisyphus/plans/eagle-oppai-tagger.md`): 初版。敵対的検証で多数の blocker / warning を指摘され差し替え。

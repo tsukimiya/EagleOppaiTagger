@@ -69,6 +69,12 @@ async function testSettings() {
     serverUrl: "",
     serverTimeoutMs: 10000,
     fallbackOnError: true,
+    // Phase 10: autoMode settings (SPEC §15.5)
+    autoMode: {
+      enabled: false,
+      pollIntervalSec: 45,
+      maxConsecutiveErrors: 5,
+    },
   };
 
   saveSettings(custom);
