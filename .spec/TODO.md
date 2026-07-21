@@ -260,6 +260,26 @@
 
 ---
 
+## Phase 10.1: 自動モード filePath バグ修正（実機検証で発見）
+
+> 現象: 自動モードで `ENOENT: ...{name}.undefined` が出て連続5回エラー停止する。
+> 原因: `eagle.item.get({ fields: [...] })` プロジェクションで `filePath` が正常に取得できない
+> （Eagle 内部が `${name}.${ext}` を組み立てる際、`ext` が select 対象外で undefined になる推定）。
+> 手動モードは `getSelected()`（fields なし）なので正常。
+
+- [x] 原因特定（librarian 調査：OSS AIタガー BarnattW/eagle-ai-image-tagger も fields プロジェクション不使用）
+- [x] `src/eagle-bridge.js` に `getItemById(id)` を追加（fields なしフル取得）
+- [x] `src/eagle-bridge.js` の `getUntagged` デフォルト fields から filePath を除外（レビュー指摘対応）
+- [x] `src/auto-tagger.js` の `tick()` を2段階取得へ変更:
+  - 候補ID集め: lightweight fields（`id`,`tags`,`importedAt` のみ）
+  - 処理対象1枚: `getItemById(id)` で fields なしフル取得してから推論
+- [x] `src/phase10-test.js` のモック更新 + getItemById 検証追加 + race condition テスト追加
+- [x] **DoD**: `npm test` 全 PASS（回帰なし・phase10 は 78 tests）
+- [x] code-simplifier レビュー実施（高0件・中4件→うち2件対応・低は外科的原則で見送り）
+- [ ] **DoD**: 実機で自動モード ON → 画像追加 → `.undefined` エラーが出ずタグ付与される（※ユーザー検証）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約

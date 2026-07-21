@@ -50,11 +50,16 @@ async function getIdsWithModifiedAt() {
  * 未タグ付け画像を取得。既存画像のアイドル処理用。
  * fields を絞るとパフォーマンス向上（SPEC §15.4 Step C）。
  *
- * @param {string[]} [fields=["id","name","filePath","tags"]]
+ * Phase 10.1 注意: `fields` に `filePath` を含めないこと。
+ * `eagle.item.get({ fields: [..., "filePath", ...] })` で `filePath` が
+ * `${name}.undefined` になり ENOENT となる（詳細は .spec/KNOWLEDGE.md Phase 10.1）。
+ * `filePath` が必要な場合は `getItemById(id)` で fields なし取得すること。
+ *
+ * @param {string[]} [fields=["id","tags","importedAt"]] - filePath は含めないこと
  * @returns {Promise<object[]>}
  */
 async function getUntagged(fields) {
-  const selectFields = fields || ["id", "name", "filePath", "tags"];
+  const selectFields = fields || ["id", "tags", "importedAt"];
   return await getItems({ isUntagged: true, fields: selectFields });
 }
 
@@ -68,6 +73,23 @@ async function countUntagged() {
   return await getEagle().item.count({ isUntagged: true });
 }
 
+/**
+ * 指定 ID のアイテムを `fields` プロジェクションなしで取得する（フル item）。
+ *
+ * Phase 10.1 修正: `eagle.item.get({ fields: [...] })` で `filePath` を指定しても
+ * 正常に取得できない（Eagle 内部が `${name}.${ext}` を組み立てる際 `ext` が
+ * プロジェクション対象外で undefined になり、`.undefined` で ENOENT）。
+ * 手動モードの `getSelected()`（fields なし）と同等のフル item を取得するには、
+ * `fields` を省略して呼ぶ必要がある。
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>} フル item。存在しない場合は null。
+ */
+async function getItemById(id) {
+  const items = await getEagle().item.get({ ids: [id] });
+  return Array.isArray(items) && items.length > 0 ? items[0] : null;
+}
+
 module.exports = {
   getSelectedItems,
   saveItem,
@@ -75,4 +97,5 @@ module.exports = {
   getIdsWithModifiedAt,
   getUntagged,
   countUntagged,
+  getItemById,
 };

@@ -27,6 +27,7 @@ const {
   getIdsWithModifiedAt,
   getUntagged,
   saveItem,
+  getItemById,
 } = require(path.join(srcdir, "eagle-bridge"));
 
 // 新規候補の取得を打ち切る上限（巨大ライブラリで getItems が膨張するのを防ぐ）
@@ -95,6 +96,13 @@ async function processOneItem(item, settings) {
 /**
  * ポーリングの1 tick。新規 → 未タグ付けの順に1枚だけ処理する。
  * inTick フラグで再入を防止する（setInterval は async を待たないため）。
+ *
+ * Phase 10.1: 2段階取得へ変更。
+ * 候補は lightweight な fields（id/tags/importedAt）で集め、実際に処理する
+ * 先頭1枚だけ `getItemById(id)` で fields なしフル取得する。
+ * 理由: `eagle.item.get({ fields: [...] })` プロジェクションで `filePath` が
+ * `${name}.${ext}` の ext 未選択により undefined になり ENOENT となるため。
+ * 詳細は .spec/KNOWLEDGE.md の Phase 10.1 セクション参照。
  */
 async function tick() {
   if (state.inTick || state.paused || !state.running) return;
@@ -104,10 +112,13 @@ async function tick() {
     const settings = state.settings || loadSettings();
     if (state.lastScanAt == null) state.lastScanAt = Date.now();
 
-    // Step B: 新規候補抽出（modifiedAt > lastScanAt）
+    // Step B: 新規候補 ID 抽出（modifiedAt > lastScanAt）
     // Copilot 指摘対応: modifiedAt 降順で最新から取得し、タグ編集等の
     // ノイズを除外するため、取得後に tags.length === 0 でフィルタする。
-    let newItems = [];
+    //
+    // Phase 10.1: fields から filePath/name を外し、ID と tags のみ取得。
+    // filePath は Step E で getItemById(id) により fields なしで取得する。
+    let newItemIds = [];
     try {
       const all = await getIdsWithModifiedAt();
       const newIds = all
@@ -123,10 +134,16 @@ async function tick() {
       if (newIds.length > 0) {
         const fetched = await getItems({
           ids: newIds,
-          fields: ["id", "name", "filePath", "tags", "importedAt"],
+          fields: ["id", "tags"],
         });
         // 手動タグ編集された画像を弾くため、未タグ付けのみ残す
-        newItems = fetched.filter((it) => !it.tags || it.tags.length === 0);
+        const tagFiltered = new Set(
+          fetched
+            .filter((it) => !it.tags || it.tags.length === 0)
+            .map((it) => it.id)
+        );
+        // 元の modifiedAt 降順を維持して ID リストを作る
+        newItemIds = newIds.filter((id) => tagFiltered.has(id));
       }
     } catch (err) {
       // getIdsWithModifiedAt は Build12+ 必須。失敗時は新規検知をスキップして
@@ -134,39 +151,36 @@ async function tick() {
       console.warn("[auto-tagger] new-item detection failed:", err.message);
     }
 
-    // Step C: 既存の未タグ付け候補
+    // Step C: 既存の未タグ付け候補 ID
     // Copilot 指摘対応: importedAt 降順でソートし、新規に近い順に処理する。
     // 1 tick = 1枚のため、lastScanAt が前進しても残りの新規画像が
     // 古い未タグ付け画像の後ろに埋もれないようにする。
-    let untaggedItems = [];
+    //
+    // Phase 10.1: fields は id と importedAt（ソート用）のみ。filePath は使わない。
+    let untaggedIds = [];
     try {
-      untaggedItems = await getUntagged([
-        "id",
-        "name",
-        "filePath",
-        "tags",
-        "importedAt",
-      ]);
-      untaggedItems.sort(
-        (a, b) => (b.importedAt || 0) - (a.importedAt || 0)
-      );
+      const untaggedItems = await getUntagged(["id", "importedAt"]);
+      untaggedIds = untaggedItems
+        .filter((it) => it && it.id)
+        .sort((a, b) => (b.importedAt || 0) - (a.importedAt || 0))
+        .map((it) => it.id);
     } catch (err) {
       console.warn("[auto-tagger] getUntagged failed:", err.message);
     }
 
-    // Step D: 結合（新規優先・id で重複除外）
+    // Step D: 結合（新規優先・id で重複除外）。workQueue は ID のみ保持。
     const seen = new Set();
     const workQueue = [];
-    for (const it of newItems) {
-      if (it && it.id && !seen.has(it.id)) {
-        seen.add(it.id);
-        workQueue.push({ item: it, isNew: true });
+    for (const id of newItemIds) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        workQueue.push({ id, isNew: true });
       }
     }
-    for (const it of untaggedItems) {
-      if (it && it.id && !seen.has(it.id)) {
-        seen.add(it.id);
-        workQueue.push({ item: it, isNew: false });
+    for (const id of untaggedIds) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        workQueue.push({ id, isNew: false });
       }
     }
 
@@ -175,8 +189,22 @@ async function tick() {
       return;
     }
 
-    // Step E: 先頭1枚を処理
-    const { item, isNew } = workQueue[0];
+    // Step E: 先頭1枚を fields なしフル取得（filePath の正しい絶対パスを得るため）
+    const { id, isNew } = workQueue[0];
+    let item = null;
+    try {
+      item = await getItemById(id);
+    } catch (err) {
+      // アイテムが既に削除されている等のレース。スキップして次 tick へ。
+      console.warn(`[auto-tagger] getItemById failed for ${id}:`, err.message);
+    }
+    if (!item) {
+      // lastScanAt を更新して次へ（悪化ループを防ぐ）
+      state.lastScanAt = Date.now();
+      saveLastScanAt(state.lastScanAt);
+      return;
+    }
+
     if (typeof state.onProgress === "function") {
       state.onProgress({
         status: "processing",
