@@ -31,6 +31,16 @@
 - あるのは `onPluginCreate` / `onPluginRun` / `onPluginBeforeExit` / `onPluginShow` / `onPluginHide` / `onLibraryChanged` / `onThemeChanged`
 - 新規画像検知は **ポーリング** で実現するしかない
 
+### `fields` プロジェクションの罠（Phase 10.1 で発見・最重要）
+- `eagle.item.get({ fields: [..., "filePath", ...] })` で `filePath` を指定しても**正常に取得できない**
+- 現象: `filePath` が `${name}.undefined` になり `ENOENT`（`ext` フィールド未選択のため）
+- **対策**: `filePath` が必要な場合は `fields` を省略して `eagle.item.get({ ids: [id] })` または `getSelected()` / `getAll()` を使う
+- ラッパー: `getItemById(id)`（`src/eagle-bridge.js`）が fields なしフル取得を提供
+- 軽量データが欲しい場合は `fields: ["id", "tags"]` 等、`filePath` を含めないセットを使う
+- OSS AIタガー（`BarnattW/eagle-ai-image-tagger` 等）は誰も `fields` を使わず全部 `getSelected()`/`getAll()`
+- 公式 doc の例も `["id","name","tags","modifiedAt"]` 等、軽量メタデータのみ
+- 詳細は `.spec/KNOWLEDGE.md` Phase 10.1 セクション + ADR-12 候補
+
 ### Background Service Plugin 型
 - `manifest.json` の `main` に `"serviceMode": true` を追加するだけ（公式サポート）
 - Eagle 起動時にバックグラウンドで常駐、ウィンドウも出せる

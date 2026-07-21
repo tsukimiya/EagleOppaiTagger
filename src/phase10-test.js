@@ -139,6 +139,7 @@ function testEagleBridgeAutoModeAPIs() {
     getIdsWithModifiedAt,
     getUntagged,
     countUntagged,
+    getItemById,
   } = require("./eagle-bridge");
 
   // getItems
@@ -166,6 +167,13 @@ function testEagleBridgeAutoModeAPIs() {
   }).then((result) => {
     ok(result === 42, "countUntagged returns the mocked count");
     ok(lastCountOptions && lastCountOptions.isUntagged === true, "countUntagged sets isUntagged");
+
+    // getItemById (Phase 10.1): fields なしで { ids: [id] } を投げ、結果の先頭を返す
+    return getItemById("1");
+  }).then((result) => {
+    ok(result && result.id === "1", "getItemById returns the single full item");
+    ok(lastGetOptions && Array.isArray(lastGetOptions.ids) && lastGetOptions.ids[0] === "1", "getItemById forwards ids: [id]");
+    ok(lastGetOptions && lastGetOptions.fields === undefined, "getItemById does NOT set fields (full item)");
   });
 }
 
@@ -287,11 +295,19 @@ async function testTickProcessesUntaggedWhenNoNew() {
     item: {
       getSelected: async () => [],
       get: async (opts) => {
+        // getItemById (Phase 10.1): fields なし → フル item
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          if (opts.ids.includes("EXISTING1")) {
+            return [makeMockItem({
+              id: "EXISTING1", name: "old.png", filePath: "/tmp/old.png",
+              tags: [], importedAt: ts - 100000, // 古い
+            })];
+          }
+          return [];
+        }
+        // getUntagged → lightweight fields
         if (opts && opts.isUntagged) {
-          return [makeMockItem({
-            id: "EXISTING1", name: "old.png", filePath: "/tmp/old.png",
-            tags: [], importedAt: ts - 100000, // 古い
-          })];
+          return [{ id: "EXISTING1", importedAt: ts - 100000 }];
         }
         return [];
       },
@@ -405,6 +421,55 @@ async function testTickNoWorkWhenLibraryEmpty() {
   ok(state.processedNewCount === 0 && state.processedUntaggedCount === 0, "no counts incremented");
 }
 
+async function testTickSkipsWhenItemDisappears() {
+  section("auto-tagger — tick skips when item disappears (Phase 10.1 race)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const ts = Date.now();
+  const eagle = {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        // Step B: 新規候補の lightweight 取得（id + tags）
+        if (opts && Array.isArray(opts.ids) && opts.fields) {
+          return opts.ids.map((id) => ({ id, tags: [] }));
+        }
+        // Step E: getItemById — アイテムが既に削除されている race
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          return [];
+        }
+        // Step C: getUntagged → lightweight
+        if (opts && opts.isUntagged) {
+          return [{ id: "GONE1", importedAt: ts - 1 }];
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [
+        { id: "GONE1", modifiedAt: ts + 1 }, // 新規候補として検知
+      ],
+      count: async () => 1,
+    },
+  };
+
+  const { events, state } = await runOneTick({
+    settings: {
+      threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+      useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+      autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+    },
+    eagle,
+    lastScanAt: 0,
+    mainOverrides: {},
+  });
+
+  const processingEv = events.find((e) => e.ev.status === "processing");
+  ok(processingEv == null, "no processing event when item disappeared before getItemById");
+  ok(state.processedNewCount === 0, "processedNewCount unchanged (graceful skip)");
+  ok(state.processedUntaggedCount === 0, "processedUntaggedCount unchanged");
+  ok(state.consecutiveErrors === 0, "no error counted (race is not a real error)");
+}
+
 async function testConsecutiveErrorsAutoStop() {
   section("auto-tagger — consecutive errors trigger auto-stop");
   clearAllSrcCache();
@@ -415,11 +480,20 @@ async function testConsecutiveErrorsAutoStop() {
     item: {
       getSelected: async () => [],
       get: async (opts) => {
+        // getItemById (Phase 10.1): fields なし → フル item
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          if (opts.ids.includes("BAD1")) {
+            return [{
+              id: "BAD1", name: "broken.png", filePath: "/tmp/broken.png",
+              tags: [], importedAt: ts - 1,
+              async save() {},
+            }];
+          }
+          return [];
+        }
+        // getUntagged → lightweight fields
         if (opts && opts.isUntagged) {
-          return [{
-            id: "BAD1", name: "broken.png", filePath: "/tmp/broken.png",
-            tags: [], importedAt: ts - 1,
-          }];
+          return [{ id: "BAD1", importedAt: ts - 1 }];
         }
         return [];
       },
@@ -616,6 +690,7 @@ function testIndexHtmlHasAutoModeSection() {
     await testTickProcessesUntaggedWhenNoNew();
     await testTickNewItemsPrioritized();
     await testTickNoWorkWhenLibraryEmpty();
+    await testTickSkipsWhenItemDisappears();
     await testConsecutiveErrorsAutoStop();
     await testPauseAndResumeForManualRun();
     await testManualRunPausesAutoTagger();
