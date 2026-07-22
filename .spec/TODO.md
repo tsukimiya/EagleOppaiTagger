@@ -287,13 +287,13 @@
 > 根因: `ui.js` の `autoOnWarning` が `onWarning` ペイロードに含まれる `lastError` を捨てていた。
 > エラー履歴が保持されず `console.warn` のみで、DevTools を開いていないと詳細が消える。
 
-- [ ] `src/auto-tagger.js`: `errorHistory` リングバッファ（上限10件 `{at, fileName, message}`）を追加し tick の catch で記録
-- [ ] `src/auto-tagger.js`: 閾値到達時の `onWarning` ペイロードに `lastError` / `errorHistory` を含める。二重警告（tick が onWarning 後に `stop(reason)` で再発火していた問題）を解消
-- [ ] `src/auto-tagger.js`: `getState()` で `errorHistory` を公開、`start()` でリセット
-- [ ] `src/ui.js`: 停止メッセージに直近エラーを含める。`title` 属性にエラー履歴全文
-- [ ] `src/ui.js`: 「詳細コピー」ボタン（エラー履歴 + 自動モード設定をテキストでクリップボードへ）
-- [ ] `src/phase10-test.js`: 履歴蓄積・上限キャップ・警告ペイロード・二重警告なし・start() リセットのテスト
-- [ ] **DoD**: `npm test` 全 PASS（回帰なし）
+- [x] `src/auto-tagger.js`: `errorHistory` リングバッファ（上限10件 `{at, fileName, message}`）を追加し tick の catch で記録
+- [x] `src/auto-tagger.js`: 閾値到達時の `onWarning` ペイロードに `lastError` / `errorHistory` を含める。二重警告（tick が onWarning 後に `stop(reason)` で再発火していた問題）を解消
+- [x] `src/auto-tagger.js`: `getState()` で `errorHistory` を公開、`start()` でリセット
+- [x] `src/ui.js`: 停止メッセージに直近エラーを含める。`title` 属性にエラー履歴全文
+- [x] `src/ui.js`: 「詳細コピー」ボタン（エラー履歴 + 自動モード設定をテキストでクリップボードへ）
+- [x] `src/phase10-test.js`: 履歴蓄積・上限キャップ・警告ペイロード・二重警告なし・start() リセットのテスト
+- [x] **DoD**: `npm test` 全 PASS（回帰なし・phase10: 100 passed）
 - [ ] **DoD**: 実機でエラーを起因として自動停止 → 停止メッセージにエラー原因が表示される（※ユーザー検証）
 
 ---

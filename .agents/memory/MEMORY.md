@@ -54,6 +54,12 @@
 - 既存未タグ付け: `get({isUntagged: true})` → `importedAt` 降順で「新規に近い順」を維持
 - 排他制御: 手動 `run()` 中は `pauseForManualRun()` / `resumeAfterManualRun()`（循環 import 回避のため**両方向とも遅延 require**）
 
+## Phase 10.2: 自動停止エラー診断で得た教訓
+
+- **コールバックペイロードの字段は UI 層で黙って捨てられ得る**: `onWarning` に `lastError` を入れていても ui.js が `w.message` しか表示していなかった。表示系の不備は「発信側が渡しているか」→「UI が表示しているか」の両方を確認する
+- **理由付き停止 API の二重通知**: `tick()` が `onWarning` 後に `stop(reason)` を呼ぶと `stop()` 内部が onWarning を再発火する。呼び出し側で警告済みの場合は `stop()` を reason なしで呼ぶ
+- **Eagle renderer の `navigator.clipboard` は未検証**: クリップボード書き込みには必ず `document.execCommand("copy")` フォールバックを用意する（Phase 10.2 の詳細コピーボタンで採用・実機検証待ち）
+
 ## JavaScript の罠
 
 ### `||` と `??` の違い（タイムスタンプ取り扱い）
