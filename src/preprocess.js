@@ -42,6 +42,8 @@
 "use strict";
 
 const Jimp = require("jimp");
+// fs は Eagle renderer でも Node テストでも利用可能（MEMORY 検証済み）。
+const fs = require("fs");
 
 // --- Constants (mirror V1.1_onnx/preprocessing.json) ---
 
@@ -73,12 +75,89 @@ function createCanvas() {
 }
 
 /**
+ * Chromium の DOM デコードが使える環境（Eagle renderer）かどうか。
+ * Node テスト環境では false（global に document/createImageBitmap が無い）。
+ * @returns {boolean}
+ */
+function isDomDecodeAvailable() {
+  return (
+    typeof document !== "undefined" &&
+    typeof document.createElement === "function" &&
+    typeof createImageBitmap === "function"
+  );
+}
+
+/**
+ * 生の RGBA バイト列から Jimp 画像を生成する。
+ * Jimp 0.22.x の bitmap 形式コンストラクタ `new Jimp({data,width,height}, cb)` を使う。
+ *
+ * @param {number} width
+ * @param {number} height
+ * @param {Buffer|Uint8Array|Uint8ClampedArray} data RGBA（長さ width*height*4）
+ * @returns {Promise<Jimp>}
+ */
+function rgbaToJimp(width, height, data) {
+  return new Promise((resolve, reject) => {
+    new Jimp({ data: Buffer.from(data), width, height }, (err, img) => {
+      if (err) return reject(err);
+      resolve(img);
+    });
+  });
+}
+
+/**
+ * Chromium の DOM 機能（createImageBitmap + canvas）で画像をデコードし、
+ * RGBA バイト列を返す。WebP/AVIF/GIF など Jimp が未対応の形式も、
+ * Chromium が読めるものであればデコードできる。
+ *
+ * renderer（DOM あり）専用。Node では isDomDecodeAvailable() が false のため呼ばれない。
+ *
+ * @param {string} filePath
+ * @returns {Promise<{ width: number, height: number, data: Buffer }>} RGBA
+ */
+async function decodeImageWithDom(filePath) {
+  const bytes = fs.readFileSync(filePath);
+  // Blob は renderer（Chromium）のグローバル。MIME は Chromium に sniff させる。
+  const blob = new Blob([bytes]);
+  const bitmap = await createImageBitmap(blob);
+  const width = bitmap.width;
+  const height = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0);
+  const imageData = ctx.getImageData(0, 0, width, height);
+  if (typeof bitmap.close === "function") bitmap.close();
+  return { width, height, data: Buffer.from(imageData.data.buffer) };
+}
+
+/**
  * Read an image and return a Jimp instance.
+ *
+ * 基本は `Jimp.read`（PNG/JPEG/BMP/TIFF/GIF — Python 参照実装との MAE 契約を維持）。
+ * Jimp が未対応の形式（例: WebP → "Unsupported MIME type: image/webp"）で失敗した場合、
+ * Eagle renderer の Chromium DOM デコードにフォールバックし、得られた RGBA を
+ * Jimp bitmap に変換して下流パイプライン（resize/letterbox/normalize）はそのまま使う。
+ *
  * @param {string} filePath
  * @returns {Promise<Jimp>}
  */
-function readImage(filePath) {
-  return Jimp.read(filePath);
+async function readImage(filePath) {
+  try {
+    return await Jimp.read(filePath);
+  } catch (jimpErr) {
+    if (!isDomDecodeAvailable()) throw jimpErr;
+    let rgba;
+    try {
+      rgba = await decodeImageWithDom(filePath);
+    } catch (domErr) {
+      throw new Error(
+        `画像のデコードに失敗しました（Jimp: ${jimpErr.message} / DOM: ${domErr.message}）: ${filePath}`
+      );
+    }
+    return rgbaToJimp(rgba.width, rgba.height, rgba.data);
+  }
 }
 
 /**
@@ -238,4 +317,8 @@ module.exports = {
   computeLetterboxSize,
   buildPaddingMask,
   extractPixelValues,
+  readImage,
+  isDomDecodeAvailable,
+  rgbaToJimp,
+  decodeImageWithDom,
 };
