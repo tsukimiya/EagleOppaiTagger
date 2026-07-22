@@ -1,11 +1,11 @@
-# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-23 02:33)
+# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-23 02:47)
 
 ## 使用ツール
 Claude Code
 
 ## 現在の状態
 
-### Phase 10.2（自動停止時のエラー診断強化）— PR #5 レビュー待ち
+### Phase 10.2（自動停止時のエラー診断強化）— マージ済み（PR #5 / d630393）
 
 ユーザー報告: 自動モードが連続エラーで停止したとき、UI に出るのは
 「停止: 連続エラーが閾値 (5) に到達したため自動停止しました」だけで原因特定が困難。
@@ -27,35 +27,35 @@ Claude Code
 
 ### PR
 
-- **#5**: https://github.com/tsukimiya/EagleOppaiTagger/pull/5
-- ブランチ: `worktree-phase10.2-auto-error-diagnostics`
-- worktree: `E:\Documents\Projects\EagleOppaiTagger\.claude\worktrees\phase10.2-auto-error-diagnostics`
+- **#5（マージ済み）**: https://github.com/tsukimiya/EagleOppaiTagger/pull/5 — squash マージ `d630393`
+- Copilot レビュー 3 件対応済み: コピー成否表示の修正 2 件（`1a3adfe`）+ TODO チェックは証跡コミット `4dba3e9` で対応済みの旨を回答
+- **docs PR（作成直後・未マージ）**: 前セッション未コミットの KNOWLEDGE 調査記録（画像取り込みトリガー不可 + ADR-13 候補）を救済。`docs/knowledge-import-trigger-consideration` ブランチ
 
 ### 残作業
 
-- [ ] **PR #5 の bot レビュー対応**（Copilot / github-actions[bot] / Claude bot — 4 endpoint 全て確認。CLAUDE.md `## PR Review Resolution` 参照）
-- [ ] レビュー通過後 `gh pr merge --squash --delete-branch` → worktree 後始末（CLAUDE.md `## ブランチ運用` の順序で）
-- [ ] **ユーザー実機検証**: エラー起因の自動停止時に停止メッセージへエラー原因が表示されるか / 「詳細コピー」が Eagle renderer で動くか（navigator.clipboard 未検証 → 動かなければ execCommand フォールバックの動作も確認）
+- [ ] **docs PR のレビュー確認 → マージ**（KNOWLEDGE 調査記録の救済分）
+- [ ] **ユーザー実機検証**: エラー起因の自動停止時に停止メッセージへエラー原因が表示されるか / 「詳細コピー」が Eagle renderer で動くか（navigator.clipboard 未検証 → 失敗時は「コピー失敗」表示 + execCommand フォールバックの動作も確認）
 - [ ] Phase 10.1 / 10 の実機 DoD 残項目（旧 HANDOFF 引継ぎ: `.undefined` エラーが出ないか等）
+- [ ] worktree 後始末（docs PR マージ後: worktree remove + ローカルブランチ削除）
 
 ## 次のセッションで最初にやること
 
-1. `gh pr view 5` + PR review 4 endpoint でレビュー指摘を確認・対応
+1. docs PR のレビュー確認 → マージ → worktree 後始末
 2. ユーザー実機検証の結果を聞く（詳細コピーの成否含む）
-3. マージ後: DoD 証跡（KNOWLEDGE 更新済み・TODO チェック済み・worktree 削除・ブランチ削除）
+3. ADR 候補（ADR-11/12/13）の起票要否をユーザーと確認（doc-writer skill）
 
 ## Git 履歴（直近）
 
 ```
-1647bc9 fix(phase10): 自動停止メッセージにエラー原因を含め診断可能に (Phase 10.2)  (worktree HEAD, PR #5)
-c80863c fix(phase10): 自動モードの filePath ENOENT を fields なし2段階取得で修正 (#4)  (main HEAD)
+d630393 fix(phase10): 自動停止メッセージにエラー原因を含め診断可能に (Phase 10.2) (#5)  (main HEAD)
+c80863c fix(phase10): 自動モードの filePath ENOENT を fields なし2段階取得で修正 (#4)
 8e29563 docs(phase10): DoD 完了 — TODO/KNOWLEDGE/HANDOFF/MEMORY 更新
 ```
 
 ## 注意点・ブロッカー
 
-- main チェックアウトに未コミットの `.spec/KNOWLEDGE.md` 変更あり（前セッション由来・今 PR とは別。触らず残してある）
-- 配布 zip は `npm run dist` で再生成が必要（マージ後、ユーザーが更新版を使う場合）
+- 配布 zip は `npm run dist` で再生成が必要（ユーザーが更新版を使う場合）
+- main の stash に `stash@{0}`（前セッション KNOWLEDGE 変更）が残っている可能性がある。docs PR に同内容を収録済みなので、PR マージ後に `git stash drop` で整理すること（内容の PR 収録を先に確認）
 
 ## ADR 候補
 
