@@ -102,7 +102,7 @@ $srcDst = JoinPath $stagePath "src"
 New-Item -ItemType Directory -Force -Path $srcDst | Out-Null
 
 $srcExcludePatterns = @(
-  "phase*-test.js",
+  "*-test.js",
   "verify.js",
   ".gitkeep"
 )

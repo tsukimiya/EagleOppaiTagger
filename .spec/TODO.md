@@ -298,6 +298,25 @@
 
 ---
 
+## Phase 10.4: WebP 等の未対応画像形式のデコード対応
+
+> 背景: 実機検証（Phase 10.2 のエラー診断経由で観測）で `少女発情旅行.png.webp` が
+> `Unsupported MIME type: image/webp` で失敗。根因は Jimp 0.22.12 が WebP 未登録のため
+> `preprocess.js` の `Jimp.read()` が投げる例外。ローカル推論（＋サーバ失敗時フォールバック）のみ影響。
+> 方針: 新規依存ゼロで、Jimp が拒否した形式を Eagle renderer の Chromium DOM
+> （`createImageBitmap` + canvas）でデコードし、RGBA を Jimp bitmap にして既存パイプラインへ流す。
+> WebP だけでなく AVIF/GIF など Chromium が読める形式全般に自動対応する。
+
+- [x] `src/preprocess.js`: `readImage()` に DOM フォールバック追加（`isDomDecodeAvailable` / `decodeImageWithDom` / `rgbaToJimp`）
+- [x] `src/preprocess-webp-test.js`: 新規テスト（DOM スタブでフォールバック経路の出力が PNG 通常経路と完全一致することを検証・14 assertions）
+- [x] `package.json`: `npm test` に新規テストを組み込み
+- [x] `scripts/make-dist.ps1`: src 除外パターンを `phase*-test.js` → `*-test.js` に汎化（新規テストファイルの配布混入を防止）
+- [x] **DoD**: `npm test` 全 PASS（phase10: 100 / webp: 14）・`npm run check` OK
+- [ ] code-simplifier レビュー実施
+- [ ] **DoD**: 実機で `.webp` 画像（例の `少女発情旅行.png.webp`）がローカル推論でタグ付与される（※ユーザー検証・DOM デコードの実機確認）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約
