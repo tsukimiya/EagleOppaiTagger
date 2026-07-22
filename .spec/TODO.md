@@ -280,6 +280,24 @@
 
 ---
 
+## Phase 10.2: 自動停止時のエラー診断強化
+
+> 背景: 実機検証で連続エラー自動停止した際、UI には汎用メッセージ
+> 「停止: 連続エラーが閾値 (5) に到達したため自動停止しました」だけが表示され、原因特定が困難だった。
+> 根因: `ui.js` の `autoOnWarning` が `onWarning` ペイロードに含まれる `lastError` を捨てていた。
+> エラー履歴が保持されず `console.warn` のみで、DevTools を開いていないと詳細が消える。
+
+- [ ] `src/auto-tagger.js`: `errorHistory` リングバッファ（上限10件 `{at, fileName, message}`）を追加し tick の catch で記録
+- [ ] `src/auto-tagger.js`: 閾値到達時の `onWarning` ペイロードに `lastError` / `errorHistory` を含める。二重警告（tick が onWarning 後に `stop(reason)` で再発火していた問題）を解消
+- [ ] `src/auto-tagger.js`: `getState()` で `errorHistory` を公開、`start()` でリセット
+- [ ] `src/ui.js`: 停止メッセージに直近エラーを含める。`title` 属性にエラー履歴全文
+- [ ] `src/ui.js`: 「詳細コピー」ボタン（エラー履歴 + 自動モード設定をテキストでクリップボードへ）
+- [ ] `src/phase10-test.js`: 履歴蓄積・上限キャップ・警告ペイロード・二重警告なし・start() リセットのテスト
+- [ ] **DoD**: `npm test` 全 PASS（回帰なし）
+- [ ] **DoD**: 実機でエラーを起因として自動停止 → 停止メッセージにエラー原因が表示される（※ユーザー検証）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約

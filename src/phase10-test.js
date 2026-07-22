@@ -550,6 +550,140 @@ async function testConsecutiveErrorsAutoStop() {
   autoTagger.stop();
 }
 
+// Phase 10.2: エラー履歴・警告ペイロード・二重警告なし（SPEC §15.10）
+function makeFailingEagleMock() {
+  const ts = Date.now();
+  return {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        // getItemById (fields なし) → 常に失敗する BAD1 を返す
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          if (opts.ids.includes("BAD1")) {
+            return [{
+              id: "BAD1", name: "broken.png", filePath: "/tmp/broken.png",
+              tags: [], importedAt: ts - 1,
+              async save() {},
+            }];
+          }
+          return [];
+        }
+        // getUntagged → lightweight fields
+        if (opts && opts.isUntagged) {
+          return [{ id: "BAD1", importedAt: ts - 1 }];
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [],
+      count: async () => 1,
+    },
+  };
+}
+
+async function testErrorHistoryAndWarningPayload() {
+  section("auto-tagger — error history + warning payload (Phase 10.2)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const settings = {
+    threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+    useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+    autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 3 },
+  };
+
+  clearAllSrcCache();
+  global.window = global;
+  global.eagle = makeFailingEagleMock();
+  const preprocess = require("./preprocess");
+  preprocess.preprocess = async () => {
+    throw new Error("ENOENT mock: broken.png.undefined");
+  };
+
+  const autoTagger = require("./auto-tagger");
+  autoTagger._resetForTest();
+
+  const warnings = [];
+  autoTagger.start({
+    settings,
+    onProgress: () => {},
+    onWarning: (w) => warnings.push(w),
+  });
+
+  // 1回目: 履歴に1件記録される
+  await autoTagger._tickForTest();
+  let hist = autoTagger.getState().errorHistory;
+  ok(hist.length === 1, "errorHistory has 1 entry after first failure");
+  ok(hist[0].fileName === "broken.png", "history entry records fileName");
+  ok(hist[0].message === "ENOENT mock: broken.png.undefined", "history entry records message");
+  ok(typeof hist[0].at === "number", "history entry records timestamp");
+
+  // 2回目: 履歴が蓄積する
+  await autoTagger._tickForTest();
+  ok(autoTagger.getState().errorHistory.length === 2, "errorHistory grows to 2");
+
+  // 3回目: 閾値到達で停止
+  await autoTagger._tickForTest();
+  const state = autoTagger.getState();
+  ok(state.running === false, "auto-stopped at threshold");
+  ok(state.errorHistory.length === 3, "errorHistory has 3 entries at stop");
+
+  // 警告は正確に1回（tick の onWarning のみ。stop() 由来の再発火なし）
+  ok(warnings.length === 1, "warning emitted exactly once (no double warning)");
+  const w = warnings[0];
+  ok(w.reason === "max_consecutive_errors", "warning reason is max_consecutive_errors");
+  ok(w.lastError === "ENOENT mock: broken.png.undefined", "warning payload includes lastError");
+  ok(w.consecutiveErrors === 3, "warning payload includes consecutiveErrors");
+  ok(Array.isArray(w.errorHistory) && w.errorHistory.length === 3, "warning payload includes errorHistory");
+  ok(w.errorHistory !== state.errorHistory, "warning errorHistory is a copy, not the internal array");
+
+  autoTagger.stop();
+}
+
+async function testErrorHistoryCappedAndStartResets() {
+  section("auto-tagger — error history capped at 10 + reset on start (Phase 10.2)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const settings = {
+    threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+    useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+    // 閾値を大きくして停止させず、履歴のキャップだけを検証する
+    autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 50 },
+  };
+
+  clearAllSrcCache();
+  global.window = global;
+  global.eagle = makeFailingEagleMock();
+  const preprocess = require("./preprocess");
+  let n = 0;
+  preprocess.preprocess = async () => {
+    n++;
+    throw new Error("fail-" + n);
+  };
+
+  const autoTagger = require("./auto-tagger");
+  autoTagger._resetForTest();
+  autoTagger.start({ settings, onProgress: () => {}, onWarning: () => {} });
+
+  for (let i = 0; i < 12; i++) await autoTagger._tickForTest();
+
+  const hist = autoTagger.getState().errorHistory;
+  ok(hist.length === 10, "errorHistory capped at 10 entries");
+  ok(hist[0].message === "fail-3", "oldest entries evicted (fail-1/2 dropped)");
+  ok(hist[9].message === "fail-12", "newest entry retained");
+  ok(autoTagger.getState().lastError === "fail-12", "lastError is the most recent");
+  ok(autoTagger.getState().running === true, "still running (threshold 50 not reached)");
+
+  // 再起動で履歴・エラー状態がリセットされる
+  autoTagger.stop();
+  autoTagger.start({ settings, onProgress: () => {}, onWarning: () => {} });
+  const fresh = autoTagger.getState();
+  ok(fresh.errorHistory.length === 0, "errorHistory reset on start()");
+  ok(fresh.lastError === null, "lastError reset on start()");
+  ok(fresh.consecutiveErrors === 0, "consecutiveErrors reset on start()");
+  autoTagger.stop();
+}
+
 async function testPauseAndResumeForManualRun() {
   section("auto-tagger — pause/resume for manual run");
   clearAllSrcCache();
@@ -662,6 +796,7 @@ function testIndexHtmlHasAutoModeSection() {
   const requiredIds = [
     "auto-enabled", "auto-interval", "auto-interval-val",
     "auto-max-errors", "auto-status-row", "auto-status",
+    "auto-error-copy-btn", // Phase 10.2: 詳細コピーボタン（SPEC §15.10）
     "auto-nsfw-warning", "auto-nsfw-dismiss", "auto-nsfw-cancel", "auto-nsfw-ok",
   ];
   for (const id of requiredIds) {
@@ -692,6 +827,8 @@ function testIndexHtmlHasAutoModeSection() {
     await testTickNoWorkWhenLibraryEmpty();
     await testTickSkipsWhenItemDisappears();
     await testConsecutiveErrorsAutoStop();
+    await testErrorHistoryAndWarningPayload();
+    await testErrorHistoryCappedAndStartResets();
     await testPauseAndResumeForManualRun();
     await testManualRunPausesAutoTagger();
     testIndexHtmlHasAutoModeSection();

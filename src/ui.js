@@ -37,6 +37,7 @@
   var autoMaxErrorsInput = document.getElementById("auto-max-errors");
   var autoStatusRow = document.getElementById("auto-status-row");
   var autoStatusEl = document.getElementById("auto-status");
+  var autoErrorCopyBtn = document.getElementById("auto-error-copy-btn");
   var autoNsfwOverlay = document.getElementById("auto-nsfw-warning");
   var autoNsfwDismiss = document.getElementById("auto-nsfw-dismiss");
   var autoNsfwCancel = document.getElementById("auto-nsfw-cancel");
@@ -222,6 +223,9 @@
     autoTagger = null;
   }
 
+  // Phase 10.2: 最後に受け取った警告ペイロード（詳細コピー用・SPEC §15.10）
+  var lastAutoWarning = null;
+
   function autoOnProgress(ev) {
     if (!autoStatusEl) return;
     if (ev.status === "processing") {
@@ -240,10 +244,76 @@
     }
   }
 
+  // Phase 10.2: エラー詳細の整形（SPEC §15.10）
+  // title 属性（ホバー表示）と「詳細コピー」ボタンの両方で使う。
+  function formatAutoErrorDetail(w) {
+    var lines = [];
+    lines.push("停止理由: " + (w.message || w.reason || ""));
+    lines.push("連続エラー: " + (w.consecutiveErrors || 0));
+    lines.push("直近エラー: " + (w.lastError || "(なし)"));
+    var hist = w.errorHistory || [];
+    lines.push("エラー履歴 (" + hist.length + " 件・新しいものほど後):");
+    for (var i = 0; i < hist.length; i++) {
+      var h = hist[i];
+      lines.push("[" + (i + 1) + "] " + new Date(h.at).toLocaleString() + " | " + (h.fileName || "") + " | " + (h.message || ""));
+    }
+    return lines.join("\n");
+  }
+
+  function copyAutoErrorDetail() {
+    if (!lastAutoWarning) return;
+    var s = loadSettingsSafe();
+    var am = s.autoMode || {};
+    var text = "[OppaiOracle Tagger] 自動モード停止詳細\n" +
+      "出力時刻: " + new Date().toLocaleString() + "\n" +
+      formatAutoErrorDetail(lastAutoWarning) + "\n" +
+      "設定: pollIntervalSec=" + am.pollIntervalSec +
+      ", maxConsecutiveErrors=" + am.maxConsecutiveErrors +
+      ", useServer=" + (!!s.useServer) +
+      ", serverUrl=" + (s.serverUrl || "(未設定)") +
+      ", threshold=" + s.threshold +
+      ", fallbackOnError=" + (s.fallbackOnError !== false);
+    function done() {
+      if (!autoErrorCopyBtn) return;
+      autoErrorCopyBtn.textContent = "コピー済";
+      setTimeout(function () { autoErrorCopyBtn.textContent = "詳細コピー"; }, 1500);
+    }
+    // Eagle renderer（Electron）で navigator.clipboard が使える保証はないため execCommand にフォールバック
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+        return;
+      }
+    } catch (_) {}
+    fallbackCopy(text);
+    done();
+  }
+
+  function fallbackCopy(text) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    } catch (e) {
+      console.warn("[ui] clipboard copy failed:", e.message);
+    }
+  }
+
   function autoOnWarning(w) {
     if (!autoStatusEl) return;
-    autoStatusEl.textContent = "停止: " + (w.message || w.reason || "");
+    // 停止メッセージに直近エラーを含め、表示だけで原因が分かるようにする（SPEC §15.10）
+    var text = "停止: " + (w.message || w.reason || "");
+    if (w.lastError) text += " | 直近エラー: " + w.lastError;
+    autoStatusEl.textContent = text;
     autoStatusEl.style.color = "#ca4";
+    autoStatusEl.title = formatAutoErrorDetail(w);
+    lastAutoWarning = w;
+    if (autoErrorCopyBtn) {
+      autoErrorCopyBtn.style.display = (w.errorHistory && w.errorHistory.length) ? "inline-block" : "none";
+    }
     if (autoEnabledCheckbox) autoEnabledCheckbox.checked = false;
     // Copilot 指摘対応: localStorage 側の autoMode.enabled も false に更新
     // （次回ウィンドウ再オープンで「自動停止したはずが再開する」のを防ぐ）
@@ -259,10 +329,14 @@
       onProgress: autoOnProgress,
       onWarning: autoOnWarning,
     });
+    // 前回の停止情報をクリア（SPEC §15.10）
+    lastAutoWarning = null;
+    if (autoErrorCopyBtn) autoErrorCopyBtn.style.display = "none";
     if (autoStatusRow) autoStatusRow.style.display = "block";
     if (autoStatusEl) {
       autoStatusEl.textContent = "自動モード動作中";
       autoStatusEl.style.color = "#4a7";
+      autoStatusEl.title = "";
     }
   }
 
@@ -284,6 +358,9 @@
   }
   if (autoMaxErrorsInput) {
     autoMaxErrorsInput.addEventListener("input", onSettingsChanged);
+  }
+  if (autoErrorCopyBtn) {
+    autoErrorCopyBtn.addEventListener("click", copyAutoErrorDetail);
   }
 
   // 自動モード チェックボックス: ON 時は NSFW 警告 → start、OFF 時は stop

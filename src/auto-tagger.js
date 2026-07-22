@@ -33,6 +33,9 @@ const {
 // 新規候補の取得を打ち切る上限（巨大ライブラリで getItems が膨張するのを防ぐ）
 const NEW_ITEM_CAP = 50;
 
+// 保持するエラー履歴の上限（リングバッファ。SPEC §15.10）
+const ERROR_HISTORY_CAP = 10;
+
 // シングルトン状態
 let state = createFreshState();
 
@@ -47,6 +50,7 @@ function createFreshState() {
     processedUntaggedCount: 0,
     lastScanAt: null,
     lastError: null,
+    errorHistory: [],
     onProgress: null,
     onWarning: null,
     settings: null,
@@ -66,6 +70,7 @@ function getState() {
     processedUntaggedCount: state.processedUntaggedCount,
     lastScanAt: state.lastScanAt,
     lastError: state.lastError,
+    errorHistory: state.errorHistory.slice(),
   };
 }
 
@@ -231,6 +236,15 @@ async function tick() {
     } catch (err) {
       state.consecutiveErrors++;
       state.lastError = err.message;
+      // エラー履歴をリングバッファに記録（停止時の原因診断用・SPEC §15.10）
+      state.errorHistory.push({
+        at: Date.now(),
+        fileName: item.name,
+        message: err.message,
+      });
+      if (state.errorHistory.length > ERROR_HISTORY_CAP) {
+        state.errorHistory.shift();
+      }
       console.warn(
         `[auto-tagger] inference failed for ${item.name}:`,
         err.message
@@ -252,10 +266,13 @@ async function tick() {
             reason: "max_consecutive_errors",
             consecutiveErrors: state.consecutiveErrors,
             lastError: state.lastError,
+            errorHistory: state.errorHistory.slice(),
             message: reason,
           });
         }
-        stop(reason);
+        // 警告は上で発火済みのため、reason なしで stop する
+        // （reason を渡すと stop() が onWarning を再発火し二重通知になる・SPEC §15.10）
+        stop();
         return;
       }
     }
@@ -294,6 +311,7 @@ function start(options) {
   state.processedUntaggedCount = 0;
   state.lastScanAt = loadLastScanAt() ?? Date.now();
   state.lastError = null;
+  state.errorHistory = [];
   state.timer = setInterval(() => {
     // setInterval は async 関数の完了を待たないので、
     // tick 内部の inTick ガードで再入を防ぐ
