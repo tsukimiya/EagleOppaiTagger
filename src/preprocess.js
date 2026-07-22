@@ -81,6 +81,7 @@ function createCanvas() {
  */
 function isDomDecodeAvailable() {
   return (
+    typeof Blob === "function" &&
     typeof document !== "undefined" &&
     typeof document.createElement === "function" &&
     typeof createImageBitmap === "function"
@@ -116,20 +117,26 @@ function rgbaToJimp(width, height, data) {
  * @returns {Promise<{ width: number, height: number, data: Buffer }>} RGBA
  */
 async function decodeImageWithDom(filePath) {
-  const bytes = fs.readFileSync(filePath);
+  const bytes = await fs.promises.readFile(filePath);
   // Blob は renderer（Chromium）のグローバル。MIME は Chromium に sniff させる。
   const blob = new Blob([bytes]);
   const bitmap = await createImageBitmap(blob);
-  const width = bitmap.width;
-  const height = bitmap.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(bitmap, 0, 0);
-  const imageData = ctx.getImageData(0, 0, width, height);
-  if (typeof bitmap.close === "function") bitmap.close();
-  return { width, height, data: Buffer.from(imageData.data.buffer) };
+  try {
+    const width = bitmap.width;
+    const height = bitmap.height;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("2D canvas context を取得できません");
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    const imageData = ctx.getImageData(0, 0, width, height);
+    return { width, height, data: Buffer.from(imageData.data) };
+  } finally {
+    if (typeof bitmap.close === "function") bitmap.close();
+  }
 }
 
 /**

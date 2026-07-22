@@ -17,7 +17,6 @@
  */
 "use strict";
 
-const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -94,6 +93,31 @@ function testIsDomDecodeAvailableFalseInNode() {
   ok(isDomDecodeAvailable() === false, "Node 環境では false");
 }
 
+function testIsDomDecodeAvailableRequiresBlob() {
+  section("isDomDecodeAvailable は Blob も必須");
+  removeDomStub();
+  global.createImageBitmap = async function createImageBitmap(_blob) {
+    return { width: 1, height: 1, close() {} };
+  };
+  global.document = {
+    createElement() {
+      return {
+        getContext() {
+          return {
+            drawImage() {},
+            getImageData() { return { data: new Uint8ClampedArray(4) }; },
+          };
+        },
+      };
+    },
+  };
+  try {
+    ok(isDomDecodeAvailable() === false, "Blob が無ければ false");
+  } finally {
+    removeDomStub();
+  }
+}
+
 async function testRgbaToJimp() {
   section("rgbaToJimp が RGBA バイト列から Jimp を生成");
   const w = 2, h = 2;
@@ -122,7 +146,9 @@ async function testFallbackEquivalentToPngPath() {
       src.setPixelColor(colors[ci++], x, y);
     }
   }
-  const rgba = new Uint8ClampedArray(src.bitmap.data);
+  const rgba = new Uint8ClampedArray(src.bitmap.data.length + 8);
+  rgba.set(src.bitmap.data, 4);
+  const rgbaWithOffset = rgba.subarray(4, 4 + src.bitmap.data.length);
 
   // 通常経路: 実 PNG ファイル → preprocess
   const pngPath = path.join(tmpDir, "ref.png");
@@ -130,7 +156,7 @@ async function testFallbackEquivalentToPngPath() {
   const viaPng = await preprocess(pngPath);
 
   // フォールバック経路: 実体はダミーの webp 風ファイルを DOM スタブで同じ RGBA にデコード
-  installDomStub(w, h, rgba);
+  installDomStub(w, h, rgbaWithOffset);
   try {
     ok(isDomDecodeAvailable() === true, "DOM スタブ設置中は true");
 
@@ -198,6 +224,36 @@ async function testDomFailureReportsBoth() {
   }
 }
 
+async function testDomContextFailureReportsBoth() {
+  section("canvas 2D context 取得失敗時は DOM エラーとして報告");
+  const badPath = path.join(tmpDir, "ctx-null.webp");
+  fs.writeFileSync(badPath, Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "binary"));
+  global.Blob = class Blob { constructor() {} };
+  global.createImageBitmap = async function () { return { width: 1, height: 1, close() {} }; };
+  global.document = {
+    createElement() {
+      return {
+        width: 0,
+        height: 0,
+        getContext() { return null; },
+      };
+    },
+  };
+  try {
+    let threw = false;
+    try {
+      await readImage(badPath);
+    } catch (err) {
+      threw = true;
+      ok(/2D canvas context/.test(err.message), "context 取得失敗が含まれる: " + err.message);
+      ok(/DOM:/.test(err.message), "DOM 側エラーとして報告される");
+    }
+    ok(threw, "context 取得失敗時は例外");
+  } finally {
+    removeDomStub();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -207,10 +263,12 @@ async function testDomFailureReportsBoth() {
   console.log("=============================================");
   try {
     testIsDomDecodeAvailableFalseInNode();
+    testIsDomDecodeAvailableRequiresBlob();
     await testRgbaToJimp();
     await testFallbackEquivalentToPngPath();
     await testJimpErrorPropagatesWithoutDom();
     await testDomFailureReportsBoth();
+    await testDomContextFailureReportsBoth();
   } catch (err) {
     console.error("\nFATAL ERROR: " + err.message);
     console.error(err.stack);
