@@ -146,6 +146,8 @@ async function testFallbackEquivalentToPngPath() {
       src.setPixelColor(colors[ci++], x, y);
     }
   }
+  // 先頭にダミー領域を置いた subarray を使い、byteOffset 非ゼロでも
+  // preprocess.js が余分な領域を取り込まないことを回帰テストする。
   const rgba = new Uint8ClampedArray(src.bitmap.data.length + 8);
   rgba.set(src.bitmap.data, 4);
   const rgbaWithOffset = rgba.subarray(4, 4 + src.bitmap.data.length);
@@ -206,6 +208,7 @@ async function testDomFailureReportsBoth() {
   const badPath = path.join(tmpDir, "dom-fails.webp");
   fs.writeFileSync(badPath, Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "binary"));
   // DOM は利用可能だが createImageBitmap が失敗する状況
+  // 可用性判定後に canvas context 取得で失敗させるので、Blob 実装は最小で十分。
   global.Blob = class Blob { constructor() {} };
   global.createImageBitmap = async function () { throw new Error("decode failed"); };
   global.document = { createElement() { return {}; } };
