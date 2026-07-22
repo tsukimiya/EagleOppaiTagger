@@ -273,32 +273,38 @@
       ", serverUrl=" + (s.serverUrl || "(未設定)") +
       ", threshold=" + s.threshold +
       ", fallbackOnError=" + (s.fallbackOnError !== false);
-    function done() {
+    function showResult(success) {
       if (!autoErrorCopyBtn) return;
-      autoErrorCopyBtn.textContent = "コピー済";
+      // Copilot 指摘対応: 実際の成否に応じて表示を分ける（失敗を「コピー済」にしない）
+      autoErrorCopyBtn.textContent = success ? "コピー済" : "コピー失敗";
       setTimeout(function () { autoErrorCopyBtn.textContent = "詳細コピー"; }, 1500);
     }
     // Eagle renderer（Electron）で navigator.clipboard が使える保証はないため execCommand にフォールバック
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text); done(); });
+        navigator.clipboard.writeText(text).then(
+          function () { showResult(true); },
+          function () { showResult(fallbackCopy(text)); }
+        );
         return;
       }
     } catch (_) {}
-    fallbackCopy(text);
-    done();
+    showResult(fallbackCopy(text));
   }
 
+  // Copilot 指摘対応: execCommand の成否を呼び出し側へ返し、UI で正確に成功表示できるようにする
   function fallbackCopy(text) {
     try {
       var ta = document.createElement("textarea");
       ta.value = text;
       document.body.appendChild(ta);
       ta.select();
-      document.execCommand("copy");
+      var okCopy = document.execCommand("copy");
       document.body.removeChild(ta);
+      return okCopy === true;
     } catch (e) {
       console.warn("[ui] clipboard copy failed:", e.message);
+      return false;
     }
   }
 
