@@ -30,6 +30,8 @@ const {
   rgbaToJimp,
 } = require("./preprocess");
 
+const OFFSET_PADDING_BYTES = 4;
+
 let passed = 0;
 let failed = 0;
 function ok(cond, msg) {
@@ -147,11 +149,14 @@ async function testFallbackEquivalentToPngPath() {
       src.setPixelColor(colors[ci++], x, y);
     }
   }
-  // 先頭にダミー領域を置いた subarray を使い、byteOffset 非ゼロでも
+  // 先頭に 1px 分（RGBA 4byte）のダミー領域を置いた subarray を使い、byteOffset 非ゼロでも
   // preprocess.js が余分な領域を取り込まないことを回帰テストする。
-  const rgba = new Uint8ClampedArray(src.bitmap.data.length + 8);
-  rgba.set(src.bitmap.data, 4);
-  const rgbaWithOffset = rgba.subarray(4, 4 + src.bitmap.data.length);
+  const rgba = new Uint8ClampedArray(src.bitmap.data.length + OFFSET_PADDING_BYTES);
+  rgba.set(src.bitmap.data, OFFSET_PADDING_BYTES);
+  const rgbaWithOffset = rgba.subarray(
+    OFFSET_PADDING_BYTES,
+    OFFSET_PADDING_BYTES + src.bitmap.data.length
+  );
 
   // 通常経路: 実 PNG ファイル → preprocess
   const pngPath = path.join(tmpDir, "ref.png");
@@ -215,7 +220,7 @@ async function testDomFailureReportsBoth() {
   const badPath = path.join(tmpDir, "dom-fails.webp");
   fs.writeFileSync(badPath, Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "binary"));
   // DOM は利用可能だが createImageBitmap が失敗する状況
-  // このケースは Blob 可用性チェック通過後の別経路（canvas context 取得失敗）を見たいだけなので、
+  // このケースは Blob 可用性チェック通過後の別経路（createImageBitmap 失敗）を見たいだけなので、
   // Blob 実装は最小で十分。Blob 必須判定自体は別テストで検証済み。
   global.Blob = class Blob { constructor() {} };
   global.createImageBitmap = async function () { throw new Error("decode failed"); };
