@@ -214,7 +214,8 @@ async function testDomFailureReportsBoth() {
   const badPath = path.join(tmpDir, "dom-fails.webp");
   fs.writeFileSync(badPath, Buffer.from("RIFF\0\0\0\0WEBPVP8 ", "binary"));
   // DOM は利用可能だが createImageBitmap が失敗する状況
-  // 可用性判定後に canvas context 取得で失敗させるので、Blob 実装は最小で十分。
+  // このケースは Blob 可用性チェック通過後の別経路（canvas context 取得失敗）を見たいだけなので、
+  // Blob 実装は最小で十分。Blob 必須判定自体は別テストで検証済み。
   global.Blob = class Blob { constructor() {} };
   global.createImageBitmap = async function () { throw new Error("decode failed"); };
   global.document = { createElement() { return {}; } };

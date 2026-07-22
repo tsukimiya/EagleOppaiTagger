@@ -134,7 +134,15 @@ async function decodeImageWithDom(filePath) {
     }
     ctx.drawImage(bitmap, 0, 0);
     const imageData = ctx.getImageData(0, 0, width, height);
-    return { width, height, data: Buffer.from(imageData.data) };
+    return {
+      width,
+      height,
+      data: Buffer.from(
+        imageData.data.buffer,
+        imageData.data.byteOffset,
+        imageData.data.byteLength
+      ),
+    };
   } finally {
     if (typeof bitmap.close === "function") bitmap.close();
   }
