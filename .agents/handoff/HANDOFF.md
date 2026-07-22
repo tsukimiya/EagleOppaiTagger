@@ -1,96 +1,63 @@
-# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-22 00:56)
+# HANDOFF — Eagle OppaiOracle Tagger Plugin (2026-07-23 02:33)
 
 ## 使用ツール
-OpenCode (oh-my-opencode)
+Claude Code
 
 ## 現在の状態
 
-### Phase 10.1 修正中（commit/push/PR 作成直前）
+### Phase 10.2（自動停止時のエラー診断強化）— PR #5 レビュー待ち
 
-Phase 10（自動タグ付けモード）実機検証で発見された **`filePath` ENOENT バグ** を修正した。
-worktree `E:\Documents\Projects\EagleOppaiTagger-fix-auto-tagger-filepath` ブランチ `fix/auto-tagger-filepath` で実装完了。
-テスト全 green、code-simplifier レビュー実施済み。
+ユーザー報告: 自動モードが連続エラーで停止したとき、UI に出るのは
+「停止: 連続エラーが閾値 (5) に到達したため自動停止しました」だけで原因特定が困難。
 
-### バグ内容
+調査で、`onWarning` ペイロードの `lastError` を ui.js が捨てていたこと・二重警告・
+エラー履歴不在が判明。ユーザー合意（A+B 案）で以下を実装:
 
-- 現象: 自動モード ON → ポーリング1回目で `ENOENT: no such file or directory, open 'Z:\...\{name}.undefined'`。連続5回エラーで自動停止
-- 原因: `eagle.item.get({ fields: [..., "filePath", ...] })` の `fields` プロジェクションで `filePath` が正常に取得できない（`ext` が未選択で `${name}.undefined` になる）
-- 手動モードは `getSelected()`（fields なし）なので無事だった
-
-### 修正方針（ユーザー合意: 2段階取得）
-
-1. 候補ID集め: lightweight な fields（`id`,`tags`,`importedAt`）で取得
-2. 処理対象1枚: `getItemById(id)` で fields なしフル取得（filePath の正しい絶対パスを得る）
-3. `processOneItem(fullItem, settings)` に渡す
-
-### 変更ファイル
-
-- `src/eagle-bridge.js`: `getItemById(id)` 追加（fields なしフル取得）+ `getUntagged` デフォルト fields から filePath 除外
-- `src/auto-tagger.js`: `tick()` を2段階取得へリライト。workQueue は `{id, isNew}` のみ保持し、Step E で getItemById する
-- `src/phase10-test.js`: モックに `opts.fields` ハンドリング追加 + getItemById 検証追加 + race condition テスト追加（`testTickSkipsWhenItemDisappears`）
-- `.spec/TODO.md`: Phase 10.1 セクション追記
-- `.spec/KNOWLEDGE.md`: Phase 10.1 セクション + ADR-12 候補 + code-simplifier レビュー結果追記
-- `.agents/memory/MEMORY.md`: `fields` プロジェクションの罠を追記
+- `src/auto-tagger.js`: `errorHistory` リングバッファ（上限10件）/ onWarning に lastError+errorHistory 同梱 / 二重警告解消 / getState() 公開 / start() リセット
+- `src/ui.js`: 停止メッセージに直近エラー併記 / title に履歴全文 / 「詳細コピー」ボタン（clipboard + execCommand フォールバック）
+- `index.html`: 詳細コピーボタン追加
+- `src/phase10-test.js`: テスト +22 assertions
+- `.spec/SPEC.md` §15.10 / `.spec/TODO.md` Phase 10.2 追記
 
 ### 検証結果
 
-- `npm test`: phase2/3/4/5/10 全 green（計 192 tests passed / 0 failed、Phase 10 は 78 tests）
+- `npm test`: exit 0（phase10: **100 passed / 0 failed**）
 - `npm run check`: 全 .js 構文 OK
-- code-simplifier レビュー: 高0件・中4件（2件対応・2件見送り）・低（外科原則でスキップ）
+- code-simplifier レビュー: 高0件 / 中1件・低3件（全て現状維持推奨 → スキップ）
 
-### 残作業（このセッションで進行中）
+### PR
 
-- [ ] commit + push + PR 作成
-- [ ] Copilot レビュー対応（PR 作成後）
+- **#5**: https://github.com/tsukimiya/EagleOppaiTagger/pull/5
+- ブランチ: `worktree-phase10.2-auto-error-diagnostics`
+- worktree: `E:\Documents\Projects\EagleOppaiTagger\.claude\worktrees\phase10.2-auto-error-diagnostics`
 
-### 残作業（ユーザー実機検証）
+### 残作業
 
-- [ ] **Phase 10.1 DoD**: 自動モード ON → 新規画像追加 → `.undefined` エラーが出ずタグ付与される
-- [ ] Phase 10 DoD §15.9 の残項目（自動モード各種挙動の実機確認）
+- [ ] **PR #5 の bot レビュー対応**（Copilot / github-actions[bot] / Claude bot — 4 endpoint 全て確認。CLAUDE.md `## PR Review Resolution` 参照）
+- [ ] レビュー通過後 `gh pr merge --squash --delete-branch` → worktree 後始末（CLAUDE.md `## ブランチ運用` の順序で）
+- [ ] **ユーザー実機検証**: エラー起因の自動停止時に停止メッセージへエラー原因が表示されるか / 「詳細コピー」が Eagle renderer で動くか（navigator.clipboard 未検証 → 動かなければ execCommand フォールバックの動作も確認）
+- [ ] Phase 10.1 / 10 の実機 DoD 残項目（旧 HANDOFF 引継ぎ: `.undefined` エラーが出ないか等）
 
 ## 次のセッションで最初にやること
 
-### 優先度順
-
-1. **PR マージ状況確認**: もし未マージならレビュー対応して `gh pr merge --squash --delete-branch`
-2. **ユーザー実機検証結果待ち**: Phase 10.1 の DoD（`.undefined` が出ないか）
-3. **Phase 11 検討**（Service 化）: 実機検証で「ウィンドウ開きっぱなしで十分」と判れば不要
+1. `gh pr view 5` + PR review 4 endpoint でレビュー指摘を確認・対応
+2. ユーザー実機検証の結果を聞く（詳細コピーの成否含む）
+3. マージ後: DoD 証跡（KNOWLEDGE 更新済み・TODO チェック済み・worktree 削除・ブランチ削除）
 
 ## Git 履歴（直近）
 
 ```
-8e29563 docs(phase10): DoD 完了 — TODO/KNOWLEDGE/HANDOFF/MEMORY 更新  (main HEAD)
-051f1db feat(phase10): 自動タグ付けモード（Window 内ポーリング） (#3)
-a6f37ea fix(phase10): Copilot PR review 指摘対応
+1647bc9 fix(phase10): 自動停止メッセージにエラー原因を含め診断可能に (Phase 10.2)  (worktree HEAD, PR #5)
+c80863c fix(phase10): 自動モードの filePath ENOENT を fields なし2段階取得で修正 (#4)  (main HEAD)
+8e29563 docs(phase10): DoD 完了 — TODO/KNOWLEDGE/HANDOFF/MEMORY 更新
 ```
-
-## worktree 状態
-
-- main: `E:\Documents\Projects\EagleOppaiTagger` @ `8e29563`
-- **fix/auto-tagger-filepath**: `E:\Documents\Projects\EagleOppaiTagger-fix-auto-tagger-filepath`（commit/push/PR 前に作業中）
-
-## 試したこと・結果（今回セッション）
-
-### 成功したアプローチ
-
-- **ユーザーからエラーメッセージ全文提供してもらい即座に原因特定**: `@iannahchandesu_.undefined` の `.undefined` から `${name}.${ext}` 組み立て失敗を推定
-- **librarian で Eagle 公式 doc + OSS プラグイン調査**: 公式の `fields` の例が軽量メタデータのみ・AIタガー OSS は誰も `fields` を使っていないことを確認
-- **2段階取得で パフォーマンスと正確性を両立**: lightweight fields で候補ID集め、処理対象1枚だけ getItemById
-- **race condition 保護**: getItemById が null/throw を返すケースを catch + lastScanAt 更新で graceful degradation
-- **code-simplifier レビューで getUntagged デフォルト fields の見落としを指摘** → 即座に修正
-
-### 教訓
-
-- Phase 10 実装時、`fields` プロジェクションは公式 doc の機能として載っていたため鵜呑みにした。実機検証で初めて罠が発覚
-- 「公式 doc に書いてるから使える」ではなく、OSS プラグインの実例を確認すべきだった
 
 ## 注意点・ブロッカー
 
-- **Phase 10.1 実機検証必須**: コード修正したが、実際の Eagle 4.0 Build12 で `eagle.item.get({ ids: [id] })` がフル item を返すかは未確認（`getSelected()` がフル item を返す事実から推定）
-- もし `get({ ids })` でも filePath が取れない場合は別策（`getAll()` + filter 等）を検討
-- 配布 zip は `npm run dist` で再生成が必要（古い zip を使うと直っていない）
+- main チェックアウトに未コミットの `.spec/KNOWLEDGE.md` 変更あり（前セッション由来・今 PR とは別。触らず残してある）
+- 配布 zip は `npm run dist` で再生成が必要（マージ後、ユーザーが更新版を使う場合）
 
 ## ADR 候補
 
-- **ADR-12 候補**: Eagle Plugin API で `filePath` を使う場合は `fields` プロジェクションを避ける（詳細は `.spec/KNOWLEDGE.md` Phase 10.1）
-- **ADR-11 候補**（継続）: 自動タグ付けは Window 内ポーリングで段階導入（Phase 11 で Service 化検討）
+- Phase 10.2: なし（UI 表示・内部状態の修正。トレードオフを伴う決定なし — KNOWLEDGE.md にも記載済み）
+- 継続: ADR-12 候補（fields プロジェクション回避・Phase 10.1）/ ADR-11 候補（ポーリング段階導入）は未起票
