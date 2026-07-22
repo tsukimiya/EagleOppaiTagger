@@ -130,7 +130,7 @@ async function decodeImageWithDom(filePath) {
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) {
-      throw new Error("2D canvas context を取得できません");
+      throw new Error("2D canvas context を取得できません。renderer 環境で Canvas が利用可能か確認してください");
     }
     ctx.drawImage(bitmap, 0, 0);
     const imageData = ctx.getImageData(0, 0, width, height);
