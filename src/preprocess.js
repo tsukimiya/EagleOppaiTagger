@@ -117,6 +117,7 @@ function rgbaToJimp(width, height, data) {
  * @returns {Promise<{ width: number, height: number, data: Buffer }>} RGBA
  */
 async function decodeImageWithDom(filePath) {
+  // renderer 側で UI スレッドの同期 I/O を増やさないため async read を使う。
   const bytes = await fs.promises.readFile(filePath);
   // Blob は renderer（Chromium）のグローバル。MIME は Chromium に sniff させる。
   const blob = new Blob([bytes]);

@@ -171,6 +171,12 @@ async function testFallbackEquivalentToPngPath() {
     try { await Jimp.read(webpPath); } catch (_e) { jimpFailed = true; }
     ok(jimpFailed, "webp 風ファイルは Jimp.read が失敗する（バグ再現）");
 
+    const decoded = await readImage(webpPath);
+    ok(
+      arraysEqual([...decoded.bitmap.data], [...src.bitmap.data]),
+      "DOM デコード後の RGBA が元画像と完全一致"
+    );
+
     const viaWebp = await preprocess(webpPath);
 
     ok(
