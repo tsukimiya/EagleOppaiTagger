@@ -285,6 +285,49 @@ async function testRunSkipsVideo() {
   console.log("✔ run() skips video files test passed");
 }
 
+async function testRunAllSkips() {
+  clearSrcCache();
+  global.localStorage = makeLocalStorage();
+  global.window = global;
+
+  const preprocess = require("./preprocess");
+  const inference = require("./inference");
+  const tags = require("./tags");
+
+  let preprocessCalls = 0;
+  preprocess.preprocess = async () => {
+    preprocessCalls++;
+    return { pixel_values: new Float32Array(602112), padding_mask: new Uint8Array(200704) };
+  };
+  inference.infer = async () => new Float32Array(19294).fill(0.9);
+  tags.probsToTags = () => ["tag"];
+
+  // 全アイテムが動画。1件も処理されず、最後は skipped が current=total に達する
+  // （ui.js onProgress が finishRun を呼ぶための契約）。
+  const items = [
+    { id: "1", name: "a.mp4", filePath: "/tmp/a.mp4", ext: "mp4", tags: [], async save() {} },
+    { id: "2", name: "b.webm", filePath: "/tmp/b.webm", ext: "webm", tags: [], async save() {} },
+  ];
+
+  global.eagle = { item: { getSelected: async () => items } };
+
+  const { run } = require("./main");
+  const events = [];
+  await run((ev) => events.push(ev));
+
+  const skippedEvents = events.filter((e) => e.status === "skipped");
+  const doneEvents = events.filter((e) => e.status === "done");
+  const lastEvent = events[events.length - 1];
+
+  assert.strictEqual(skippedEvents.length, 2, "both videos skipped");
+  assert.strictEqual(doneEvents.length, 0, "no image processed");
+  assert.strictEqual(preprocessCalls, 0, "preprocess never invoked");
+  assert.strictEqual(lastEvent.status, "skipped", "last event is skipped (triggers ui finishRun)");
+  assert.strictEqual(lastEvent.current, lastEvent.total, "last skipped reaches current=total");
+
+  console.log("✔ run() all-skipped completes with final skipped event test passed");
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -296,6 +339,7 @@ async function testRunSkipsVideo() {
     await testEagleBridgeSignatures();
     await testRunCancelFlow();
     await testRunSkipsVideo();
+    await testRunAllSkips();
     console.log("\nAll Phase 3 tests passed.");
     process.exitCode = 0;
   } catch (err) {
