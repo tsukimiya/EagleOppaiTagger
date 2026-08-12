@@ -809,6 +809,201 @@ function testIndexHtmlHasAutoModeSection() {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 10.5: 動画ファイルの自動タグ付け対象外フィルタ
+// ---------------------------------------------------------------------------
+
+function testIsNonImageExt() {
+  section("auto-tagger — isNonImageExt helper (Phase 10.5)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+  global.window = global;
+
+  const { isNonImageExt } = require("./auto-tagger");
+
+  // 動画拡張子
+  ok(isNonImageExt("mp4") === true, "mp4 is non-image");
+  ok(isNonImageExt("webm") === true, "webm is non-image");
+  ok(isNonImageExt("mov") === true, "mov is non-image");
+  ok(isNonImageExt("mkv") === true, "mkv is non-image");
+  ok(isNonImageExt("avi") === true, "avi is non-image");
+
+  // 大文字小文字
+  ok(isNonImageExt("MP4") === true, "MP4 (uppercase) is non-image");
+  ok(isNonImageExt("WebM") === true, "WebM (mixed case) is non-image");
+
+  // 画像拡張子（処理対象）
+  ok(isNonImageExt("png") === false, "png is image");
+  ok(isNonImageExt("jpg") === false, "jpg is image");
+  ok(isNonImageExt("webp") === false, "webp is image");
+  ok(isNonImageExt("gif") === false, "gif is image");
+
+  // 異常系（安全なデフォルト = false）
+  ok(isNonImageExt(undefined) === false, "undefined is not non-image");
+  ok(isNonImageExt(null) === false, "null is not non-image");
+  ok(isNonImageExt("") === false, "empty string is not non-image");
+}
+
+async function testTickSkipsVideoInUntagged() {
+  section("auto-tagger — tick skips video in untagged queue (Phase 10.5)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const ts = Date.now();
+  const eagle = {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        // getItemById (Phase 10.1): fields なし → フル item
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          const id = opts.ids[0];
+          const ext = id.startsWith("VIDEO") ? "mp4" : "png";
+          return [makeMockItem({
+            id, name: id + "." + ext, filePath: "/tmp/" + id + "." + ext,
+            tags: [], importedAt: ts, ext,
+          })];
+        }
+        // getUntagged → lightweight fields with ext
+        if (opts && opts.isUntagged) {
+          return [
+            { id: "VIDEO1", importedAt: ts + 100, ext: "mp4" },  // 動画（最新だが対象外）
+            { id: "IMG1", importedAt: ts + 50, ext: "png" },     // 画像（処理されるべき）
+            { id: "VIDEO2", importedAt: ts, ext: "webm" },       // 動画
+            { id: "IMG2", importedAt: ts - 50, ext: "jpg" },     // 画像
+          ];
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [], // 新規なし
+      count: async () => 4,
+    },
+  };
+
+  const { events, state } = await runOneTick({
+    settings: {
+      threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+      useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+      autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+    },
+    eagle,
+    lastScanAt: ts, // 新規検知なし
+    mainOverrides: {
+      preprocess: async () => ({ pixel_values: new Float32Array(602112), padding_mask: new Uint8Array(200704) }),
+      infer: async () => new Float32Array(19294).fill(0.9),
+      probsToTags: () => ["tag"],
+    },
+  });
+
+  // VIDEO1 は importedAt 最大だが動画のためスキップ → IMG1 が処理されるべき
+  const processingEv = events.find((e) => e.ev.status === "processing");
+  ok(processingEv != null, "processing event fired (image found despite video at top)");
+  ok(processingEv && processingEv.ev.fileName === "IMG1.png", "processed IMG1.png (not VIDEO1.mp4)");
+  ok(state.processedUntaggedCount === 1, "processedUntaggedCount === 1 (only image)");
+  ok(state.consecutiveErrors === 0, "no errors (video silently filtered, not counted as error)");
+}
+
+async function testTickAllVideosSkipsSilently() {
+  section("auto-tagger — tick idle when all untagged are videos (Phase 10.5)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const ts = Date.now();
+  const eagle = {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        if (opts && opts.isUntagged) {
+          return [
+            { id: "V1", importedAt: ts + 100, ext: "mp4" },
+            { id: "V2", importedAt: ts + 50, ext: "mov" },
+          ];
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [], // 新規なし
+      count: async () => 2,
+    },
+  };
+
+  const { events, state } = await runOneTick({
+    settings: {
+      threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+      useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+      autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+    },
+    eagle,
+    lastScanAt: ts,
+    mainOverrides: {
+      preprocess: async () => ({ pixel_values: new Float32Array(602112), padding_mask: new Uint8Array(200704) }),
+      infer: async () => new Float32Array(19294).fill(0.9),
+      probsToTags: () => ["tag"],
+    },
+  });
+
+  // 全アイテムが動画 → workQueue 空 → 処理もエラーも発生しない
+  const processingEv = events.find((e) => e.ev.status === "processing");
+  ok(processingEv == null, "no processing event (all items were videos)");
+  ok(state.processedUntaggedCount === 0, "processedUntaggedCount === 0");
+  ok(state.consecutiveErrors === 0, "no errors (videos silently filtered)");
+}
+
+async function testTickSkipsVideoInNewItems() {
+  section("auto-tagger — tick skips video in new-item detection (Phase 10.5)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const ts = Date.now();
+  const eagle = {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        // getItemById (fields なし)
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          const id = opts.ids[0];
+          return [makeMockItem({
+            id, name: id + ".png", filePath: "/tmp/" + id + ".png",
+            tags: [], importedAt: ts, ext: "png",
+          })];
+        }
+        // getItems({ ids: [...], fields: [...] }) — Step B の新規候補 lightweight 取得
+        if (opts && Array.isArray(opts.ids) && opts.fields) {
+          return opts.ids.map((id) => ({
+            id, tags: [], ext: id.startsWith("VNEW") ? "mp4" : "png",
+          }));
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [
+        { id: "VNEW1", modifiedAt: ts + 200 },  // 動画（新規だが対象外）
+        { id: "NEW1", modifiedAt: ts + 100 },   // 画像（新規・処理されるべき）
+      ],
+      count: async () => 2,
+    },
+  };
+
+  const { events, state } = await runOneTick({
+    settings: {
+      threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+      useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+      autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+    },
+    eagle,
+    lastScanAt: ts, // VNEW1 と NEW1 は共に新規
+    mainOverrides: {
+      preprocess: async () => ({ pixel_values: new Float32Array(602112), padding_mask: new Uint8Array(200704) }),
+      infer: async () => new Float32Array(19294).fill(0.9),
+      probsToTags: () => ["tag"],
+    },
+  });
+
+  // VNEW1（modifiedAt 最大）は動画のためスキップ → NEW1 が処理されるべき
+  const processingEv = events.find((e) => e.ev.status === "processing");
+  ok(processingEv != null, "processing event fired (image found despite video at top of new items)");
+  ok(processingEv && processingEv.ev.fileName === "NEW1.png", "processed NEW1.png (not VNEW1.mp4)");
+  ok(state.processedNewCount === 1, "processedNewCount === 1 (only image)");
+  ok(state.consecutiveErrors === 0, "no errors (video in new items silently filtered)");
+}
+
+// ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
 
@@ -832,6 +1027,11 @@ function testIndexHtmlHasAutoModeSection() {
     await testPauseAndResumeForManualRun();
     await testManualRunPausesAutoTagger();
     testIndexHtmlHasAutoModeSection();
+    // Phase 10.5: 動画ファイルの対象外フィルタ
+    testIsNonImageExt();
+    await testTickSkipsVideoInUntagged();
+    await testTickAllVideosSkipsSilently();
+    await testTickSkipsVideoInNewItems();
   } catch (err) {
     console.error("\nFATAL ERROR: " + err.message);
     console.error(err.stack);

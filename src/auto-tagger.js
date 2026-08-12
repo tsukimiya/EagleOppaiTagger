@@ -36,6 +36,11 @@ const NEW_ITEM_CAP = 50;
 // 保持するエラー履歴の上限（リングバッファ。SPEC §15.10）
 const ERROR_HISTORY_CAP = 10;
 
+// Phase 10.5: 動画等の非画像を除外するヘルパは file-types.js に切り出した
+// （2026-08-12: 手動モード main.js run との共有のため）。
+// 後方互換のため isNonImageExt を再エクスポート（phase10-test.js がここから取得する）。
+const { isNonImageExt } = require("./file-types");
+
 // シングルトン状態
 let state = createFreshState();
 
@@ -139,12 +144,14 @@ async function tick() {
       if (newIds.length > 0) {
         const fetched = await getItems({
           ids: newIds,
-          fields: ["id", "tags"],
+          fields: ["id", "tags", "ext"],
         });
         // 手動タグ編集された画像を弾くため、未タグ付けのみ残す
+        // 動画等の非画像ファイルも対象外として除外（Phase 10.5）
         const tagFiltered = new Set(
           fetched
             .filter((it) => !it.tags || it.tags.length === 0)
+            .filter((it) => !isNonImageExt(it.ext))
             .map((it) => it.id)
         );
         // 元の modifiedAt 降順を維持して ID リストを作る
@@ -162,11 +169,13 @@ async function tick() {
     // 古い未タグ付け画像の後ろに埋もれないようにする。
     //
     // Phase 10.1: fields は id と importedAt（ソート用）のみ。filePath は使わない。
+    // Phase 10.5: ext を追加し、動画等の非画像ファイルをキュー構築時に除外する。
     let untaggedIds = [];
     try {
-      const untaggedItems = await getUntagged(["id", "importedAt"]);
+      const untaggedItems = await getUntagged(["id", "importedAt", "ext"]);
       untaggedIds = untaggedItems
         .filter((it) => it && it.id)
+        .filter((it) => !isNonImageExt(it.ext))
         .sort((a, b) => (b.importedAt || 0) - (a.importedAt || 0))
         .map((it) => it.id);
     } catch (err) {
@@ -383,6 +392,7 @@ module.exports = {
   getState,
   pauseForManualRun,
   resumeAfterManualRun,
+  isNonImageExt,
   // テスト用: 状態を完全リセット
   _resetForTest() {
     if (state.timer) clearInterval(state.timer);

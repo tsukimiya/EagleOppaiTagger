@@ -317,6 +317,41 @@
 
 ---
 
+## Phase 10.5: 動画ファイルの自動タグ付け対象外フィルタ
+
+> 背景: 実機検証で `Unsupported MIME type: video/mp4` により連続エラー(5)到達で自動停止。
+> 根因: `tick()` の Step B/C が `ext` を取得せず動画をキューへ積む。`importedAt` 降順ソートのため
+> 動画がキュー先頭を占拠し、画像の処理を完全にブロックしていた。
+> 方針: キュー構築時（Step B/C）に `ext` を取得し、動画拡張子をフィルタで除外する。
+> `processOneItem`・推論パイプラインは触らない（外科的変更）。
+
+- [x] `src/auto-tagger.js`: `NON_IMAGE_EXTS` ブロックリスト + `isNonImageExt()` ヘルパ追加
+- [x] `src/auto-tagger.js`: Step B（新規候補 lightweight 取得）の `fields` に `ext` を追加し非画像をフィルタ
+- [x] `src/auto-tagger.js`: Step C（未タグ付け候補）の `fields` に `ext` を追加し非画像をフィルタ
+- [x] `src/phase10-test.js`: 動画フィルタのテスト追加（4関数・25 assertions）
+  - `testIsNonImageExt`: ヘルパ単体（動画/画像/大文字小文字/異常系）
+  - `testTickSkipsVideoInUntagged`: 未タグ付けに動画混在時のスキップ検証
+  - `testTickAllVideosSkipsSilently`: 全動画時のアイドル挙動検証
+  - `testTickSkipsVideoInNewItems`: 新規検知に動画混在時のスキップ検証
+- [x] **DoD**: `npm test` 全 PASS（phase10: 125 / webp: 19）・`npm run check` OK
+- [ ] **DoD**: 実機で動画（mp4）を含むライブラリで自動モード ON → 動画をスキップして画像のタグ付与が継続される（※ユーザー検証）
+
+### Phase 10.5 拡張（2026-08-12）: 手動タグ付けでも動画スキップ
+
+> 背景: 自動モードのみならず手動実行（`main.run`）でも動画が混入すると `画像のデコードに失敗しました` エラー。
+> 方針: `NON_IMAGE_EXTS` / `isNonImageExt` を `src/file-types.js` に共通化し、両モードで共有。
+> 手動ではキュー除外ではなく progress で `status:"skipped"` を通知（ユーザーに見える化）。
+
+- [x] `src/file-types.js` 新設: `NON_IMAGE_EXTS` / `isNonImageExt` 切出
+- [x] `src/auto-tagger.js`: インライン定義を `require("./file-types")` に置換（後方互換のため isNonImageExt は再エクスポート）
+- [x] `src/main.js`: `run` ループ先頭で `isNonImageExt(item.ext)` をチェックし `status:"skipped"` を progress 送信
+- [x] `src/ui.js`: `onProgress` に `skipped` 分岐追加（progressBar 進行＋「画像以外」メッセージ）
+- [x] `src/phase3-test.js`: `testRunSkipsVideo` 追加（mp4 混在時のスキップ検証）
+- [x] **DoD**: `npm test` 全 PASS（phase3 / phase10 / webp）・`npm run check` OK
+- [ ] **DoD**: 実機で画像+動画を混在選択し手動実行 → 動画が skipped 表示で画像のみタグ付与（※ユーザー検証）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約

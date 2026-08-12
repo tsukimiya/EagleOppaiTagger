@@ -21,6 +21,7 @@ const { inferRemote } = require(path.join(srcdir, "inference-client"));
 const { probsToTags } = require(path.join(srcdir, "tags"));
 const { loadSettings } = require(path.join(srcdir, "settings"));
 const { getSelectedItems, saveItem } = require(path.join(srcdir, "eagle-bridge"));
+const { isNonImageExt } = require(path.join(srcdir, "file-types"));
 
 let cancelRequested = false;
 
@@ -98,6 +99,22 @@ async function run(onProgress) {
       }
 
       const item = items[i];
+
+      // Phase 10.5 拡張（2026-08-12）: 動画等の非画像は ONNX 推論でデコード不能なため
+      // 除外して次へ。progress で skipped を通知（UI で表示）。
+      if (isNonImageExt(item.ext)) {
+        if (typeof onProgress === "function") {
+          onProgress({
+            current: i + 1,
+            total,
+            fileName: item.name,
+            status: "skipped",
+            reason: "non-image",
+          });
+        }
+        continue;
+      }
+
       try {
         if (typeof onProgress === "function") {
           onProgress({

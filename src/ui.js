@@ -182,6 +182,19 @@
       var ec = startTime ? now - startTime : 0;
       progressText.textContent = "キャンセル済み (" + processedCount + "/" + ev.total + " 枚処理)";
       showSummary(processedCount, ec); finishRun();
+    } else if (ev.status === "skipped") {
+      // Phase 10.5 拡張: 動画等の非画像は preprocess 前にスキップ。
+      // progressBar は current/total で進め、メッセージで理由を明示。
+      // skipped が最後のイベントになるケース（例: [画像, 動画] / [動画のみ]）も
+      // 完了判定と finishRun() で UI を確実に復帰させる（Copilot 指摘）。
+      if (!startTime) startTime = now;
+      progressBar.style.width = ev.total > 0 ? (ev.current/ev.total*100) + "%" : "0%";
+      progressBar.className = "";
+      progressText.textContent = ev.current + "/" + ev.total + " 枚スキップ: " + (ev.fileName || "") + " (画像以外)";
+      if (ev.current >= ev.total) {
+        showSummary(processedCount, now - startTime);
+        finishRun();
+      }
     }
   }
 
