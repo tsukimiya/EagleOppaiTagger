@@ -182,6 +182,12 @@
       var ec = startTime ? now - startTime : 0;
       progressText.textContent = "キャンセル済み (" + processedCount + "/" + ev.total + " 枚処理)";
       showSummary(processedCount, ec); finishRun();
+    } else if (ev.status === "skipped") {
+      // Phase 10.5 拡張: 動画等の非画像は preprocess 前にスキップ。
+      // progressBar は current/total で進め、メッセージで理由を明示。
+      progressBar.style.width = ev.total > 0 ? (ev.current/ev.total*100) + "%" : "0%";
+      progressBar.className = "";
+      progressText.textContent = ev.current + "/" + ev.total + " 枚スキップ: " + (ev.fileName || "") + " (画像以外)";
     }
   }
 

@@ -401,3 +401,64 @@ Phase 10.1 の実機調査で、連続エラー自動停止時の UI メッセ�
   - 選択肢: (A) DOM/canvas フォールバック【採用】= ゼロ依存・配布 zip 無変更・全形式自動対応／弱点は renderer の canvas 能力に依存し Node 単体では実デコードを検証できない (B) sharp 追加 = Node/renderer 両方で実デコード検証可・AVIF 等も堅牢／弱点は native 依存増・配布 zip 肥大・Eagle renderer での native ロードリスク (C) @jimp/wasm-webp = ESM 専用で jimp 0.22(CommonJS) と Node 16.17 環境に適合せず採用不可
   - 採用理由: 本プラグインの実行環境は Electron/Chromium renderer（DOM 利用可）に限定され、ゼロ依存・外科的変更・既存の検証済み PNG/JPEG 経路を温存できる点がプロジェクト方針（シンプルさ・allowlist 配布）に適合
   - 見直し条件: 実機で DOM デコードが動作しない場合、または Node 側で実デコードの自動検証が必要になった場合（→ sharp 等の isomorphic デコーダへ切替）
+
+---
+
+## Phase 10.5 — 動画ファイルの自動タグ付け対象外フィルタ（2026-08-03）
+
+### 根因と影響範囲
+
+- 実機検証で `Unsupported MIME type: video/mp4` / `The source image could not be decoded.` により連続エラー閾値(5)に到達し自動停止
+- 現象: `tick()` の Step C（未タグ付け候補）が `ext` を取得せず、画像も動画も区別なくキューへ積む。`importedAt` 降順ソートのため**動画が最新だとキュー先頭を占拠**し、背後の画像の処理を完全にブロックする
+- Phase 10.4 の DOM フォールバックは「未対応画像形式」には有効だが、動画フレームは Chromium もデコードしないため救済不能。本質的に「デコードを試みること自体が間違い」
+
+### 採用した修正（キュー構築時点での除外）
+
+- `NON_IMAGE_EXTS`（mp4/webm/mov/avi/mkv/...）のブロックリスト方式
+- Step B/C の lightweight 取得 `fields` に `ext` を追加し、`.filter((it) => !isNonImageExt(it.ext))` でキュー構築時に除外
+- `processOneItem` / `preprocess.js` / 推論パイプラインは一切触らない（外科的）
+- **Step E（getItemById 後）の防御的チェックは意図的に置かない**: MEMORY 記載の `ext` フィールド実績から Step B/C でのフィルタで十分と判断。「あり得ないシナリオへのエラーハンドリングはしない」（Karpathy #2）
+
+### テスト
+
+- `phase10-test.js` に4関数・25 assertions 追加:
+  - `testIsNonImageExt`: ヘルパーの単体テスト（動画/画像/大文字小文字/異常系）
+  - `testTickSkipsVideoInUntagged`: 未タグ付けに動画が含まれる際、動画をスキップして画像を処理
+  - `testTickAllVideosSkipsSilently`: 全アイテムが動画の場合、処理もエラーも発生しない
+  - `testTickSkipsVideoInNewItems`: 新規検知（Step B）に動画が含まれる際の除外
+
+### ADR 候補
+
+- **ADR-15 候補**: 自動タグ付けの対象を「動画拡張子ブロックリスト（`ext` ベース）」で制限する方針を採用
+  - 選択肢: (A) 動画拡張子ブロックリスト【採用】= 新画像形式（AVIF/HEIC 等）を誤排除しない。音声/3D は後から追加容易／弱点は将来の新動画形式を手動追加する必要がある (B) 画像拡張子 allowlist = 将来の新動画形式を自動排除できる／弱点は新画像形式（HEIC 等）がデフォルトで弾かれ「動かない」体験になる (C) Eagle item.type フィールド使用 = 最も抽象的だが、Eagle API 仕様に依存し type フィールドの信頼性/サポート範囲が未検証
+  - 採用理由: ユーザー報告が動画（mp4）に限定されており、画像の误排除リスクを最小化するブロックリストが問題に最も合致。新形式は追加容易で運用負荷も低い
+  - 見直し条件: 音声/3D ファイルでも同問題が報告された場合、または allowlist が望ましいと判断した場合
+
+---
+
+## Phase 10.5 拡張（2026-08-12）— 手動タグ付けへの動画スキップ適用
+
+### 背景
+
+- ユーザー報告: 画像と動画を混在選択しての手動実行でも `画像のデコードに失敗しました（Jimp: Unsupported MIME type: video/mp4 / DOM: ...）` が発生
+- Phase 10.5 の修正（2026-08-03）は自動モード（`auto-tagger.js`）のみを対象とし、手動（`main.js run`）は未対応だった
+
+### 共通化
+
+- `NON_IMAGE_EXTS` / `isNonImageExt` を `src/file-types.js` に切り出し、自動・手動両モードで共有
+- `auto-tagger.js` は `require("./file-types")` から取得。`module.exports` で `isNonImageExt` を再エクスポート（`phase10-test.js` が `auto-tagger` 経由で取得するため、後方互換を維持）
+
+### UX の差（自動 vs 手動）
+
+- **自動モード**: Phase 10.5 通り「キュー構築時にサイレント除外」。プロセスはユーザーの目に触れない
+- **手動モード**: `main.run` のループ先頭で `isNonImageExt(item.ext)` をチェックし、progress に `status:"skipped"` を送信。UI（`ui.js onProgress`）は progressBar を `current/total` で進めつつ「N/M 枚スキップ: <filename> (画像以外)」を表示
+
+### 得た知見
+
+- `item.ext` は `eagle.item.getSelected()` のフル item で取得可能（fields プロジェクションなし）。`getSelectedItems()` はラッパーのみで fields を絞らないので追加取得不要
+- Phase 10.5 で「Step E（getItemById 後）の防御的チェックは意図的に置かない」とした方針は自動モード固有の判断で、手動モードでは逆に「ループ先頭でチェック」が自然。モード特性の差（キュー構築 vs ユーザー選択）に合致
+
+### テスト
+
+- `phase3-test.js` に `testRunSkipsVideo` 追加（mp4 混在時のスキップ検証、7 assertions）
+- 既存 Phase 10.5 テスト（`phase10-test.js`）は `isNonImageExt` の再エクスポート経由でも全て PASS を確認
