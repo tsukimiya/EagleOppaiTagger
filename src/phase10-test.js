@@ -10,7 +10,8 @@
  * - eagle-bridge に getItems / getIdsWithModifiedAt / getUntagged / countUntagged が追加
  * - auto-tagger.start / stop / isRunning / getState
  * - tick ロジック: 新規優先・未タグ付け画像の処理
- * - 連続エラー閾値で自動停止
+ * - 連続エラー閾値で自動停止（Phase 10.6: 異なるアイテムの連続失敗でのみカウント）
+ * - 壊れたアイテムのスキップ（Phase 10.6: 再試行上限・同一アイテムでは停止しない）
  * - pauseForManualRun / resumeAfterManualRun（排他制御）
  * - main.run() 実行時に自動タグ付けが一時停止する
  *
@@ -471,54 +472,24 @@ async function testTickSkipsWhenItemDisappears() {
 }
 
 async function testConsecutiveErrorsAutoStop() {
-  section("auto-tagger — consecutive errors trigger auto-stop");
+  section("auto-tagger — consecutive errors on DISTINCT items trigger auto-stop (Phase 10.6)");
   clearAllSrcCache();
   global.localStorage = makeLocalStorage();
 
-  const ts = Date.now();
-  const eagle = {
-    item: {
-      getSelected: async () => [],
-      get: async (opts) => {
-        // getItemById (Phase 10.1): fields なし → フル item
-        if (opts && Array.isArray(opts.ids) && !opts.fields) {
-          if (opts.ids.includes("BAD1")) {
-            return [{
-              id: "BAD1", name: "broken.png", filePath: "/tmp/broken.png",
-              tags: [], importedAt: ts - 1,
-              async save() {},
-            }];
-          }
-          return [];
-        }
-        // getUntagged → lightweight fields
-        if (opts && opts.isUntagged) {
-          return [{ id: "BAD1", importedAt: ts - 1 }];
-        }
-        return [];
-      },
-      getIdsWithModifiedAt: async () => [],
-      count: async () => 1,
-    },
-  };
+  // 常に失敗する未タグ付けアイテムが3個（BAD1 が最新＝キュー先頭）
+  const { eagle } = makeFailingItemsEagleMock(3);
 
-  // 推論を常に失敗させる
   const settings = {
     threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
     useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
     autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 3 },
   };
 
-  // 3回 tick を回して、3回目で停止することを確認
   clearAllSrcCache();
   global.window = global;
   global.eagle = eagle;
   const preprocess = require("./preprocess");
-  const inference = require("./inference");
-  const tags = require("./tags");
   preprocess.preprocess = async () => { throw new Error("mock failure"); };
-  inference.infer = async () => { throw new Error("mock failure"); };
-  tags.probsToTags = () => ["tag"];
 
   const autoTagger = require("./auto-tagger");
   autoTagger._resetForTest();
@@ -530,58 +501,75 @@ async function testConsecutiveErrorsAutoStop() {
     onWarning: (w) => warnings.push(w),
   });
 
-  // 1回目: エラー
+  // t1: BAD1 が失敗 → distinct な失敗として 1
   await autoTagger._tickForTest();
-  ok(autoTagger.getState().consecutiveErrors === 1, "first tick increments error to 1");
+  ok(autoTagger.getState().consecutiveErrors === 1, "first failure counts as 1");
   ok(autoTagger.getState().running === true, "still running after first error");
 
-  // 2回目: エラー（残りは同じ BAD1 を何度も処理しようとする）
+  // t2: 同じ BAD1 の再試行 → consecutiveErrors は増えない（SPEC §15.11）
   await autoTagger._tickForTest();
-  ok(autoTagger.getState().consecutiveErrors === 2, "second tick increments error to 2");
-  ok(autoTagger.getState().running === true, "still running after second error");
+  ok(autoTagger.getState().consecutiveErrors === 1, "same-item retry does NOT increment consecutiveErrors");
+  ok(autoTagger.getState().running === true, "still running (broken item is retried, not fatal)");
 
-  // 3回目: 閾値到達で停止
+  // t3: 再試行上限 (2) に達した BAD1 はスキップされ、次の BAD2 が失敗 → 2
   await autoTagger._tickForTest();
-  ok(autoTagger.getState().consecutiveErrors === 3, "third tick increments error to 3");
-  ok(autoTagger.getState().running === false, "auto-stopped after reaching threshold");
-  ok(warnings.length >= 1, "warning emitted on auto-stop");
+  ok(autoTagger.getState().consecutiveErrors === 2, "distinct item failure increments to 2");
+
+  // t4: BAD2 の再試行 → 増えない
+  await autoTagger._tickForTest();
+  ok(autoTagger.getState().consecutiveErrors === 2, "second item retry does not increment");
+
+  // t5: BAD3 が失敗 → 閾値 3 に到達して停止
+  await autoTagger._tickForTest();
+  const st = autoTagger.getState();
+  ok(st.consecutiveErrors === 3, "third distinct item failure reaches threshold");
+  ok(st.running === false, "auto-stopped after reaching threshold on distinct items");
+  ok(warnings.length === 1, "warning emitted exactly once on auto-stop");
   ok(warnings[0] && warnings[0].reason === "max_consecutive_errors", "warning reason is max_consecutive_errors");
 
   autoTagger.stop();
 }
 
 // Phase 10.2: エラー履歴・警告ペイロード・二重警告なし（SPEC §15.10）
-function makeFailingEagleMock() {
+// Phase 10.6: 常に失敗する未タグ付けアイテムを n 個返す Eagle モックに一般化。
+// BAD1 が最新（importedAt 降順のキュー先頭）。getItemById は id 応じのフル item を返す。
+function makeFailingItemsEagleMock(n) {
   const ts = Date.now();
+  const ids = Array.from({ length: n }, (_, i) => "BAD" + (i + 1));
   return {
-    item: {
-      getSelected: async () => [],
-      get: async (opts) => {
-        // getItemById (fields なし) → 常に失敗する BAD1 を返す
-        if (opts && Array.isArray(opts.ids) && !opts.fields) {
-          if (opts.ids.includes("BAD1")) {
-            return [{
-              id: "BAD1", name: "broken.png", filePath: "/tmp/broken.png",
-              tags: [], importedAt: ts - 1,
-              async save() {},
-            }];
+    ts,
+    eagle: {
+      item: {
+        getSelected: async () => [],
+        get: async (opts) => {
+          // getItemById (fields なし) → id 応じの常に失敗するフル item
+          if (opts && Array.isArray(opts.ids) && !opts.fields) {
+            return opts.ids
+              .filter((id) => ids.includes(id))
+              .map((id) => ({
+                id,
+                name: id.toLowerCase() + ".png",
+                filePath: "/tmp/" + id + ".png",
+                tags: [],
+                importedAt: ts - ids.indexOf(id),
+                async save() {},
+              }));
+          }
+          // getUntagged → lightweight fields
+          if (opts && opts.isUntagged) {
+            return ids.map((id, i) => ({ id, importedAt: ts - i }));
           }
           return [];
-        }
-        // getUntagged → lightweight fields
-        if (opts && opts.isUntagged) {
-          return [{ id: "BAD1", importedAt: ts - 1 }];
-        }
-        return [];
+        },
+        getIdsWithModifiedAt: async () => [],
+        count: async () => n,
       },
-      getIdsWithModifiedAt: async () => [],
-      count: async () => 1,
     },
   };
 }
 
 async function testErrorHistoryAndWarningPayload() {
-  section("auto-tagger — error history + warning payload (Phase 10.2)");
+  section("auto-tagger — error history + warning payload (Phase 10.2 / 10.6)");
   clearAllSrcCache();
   global.localStorage = makeLocalStorage();
 
@@ -593,10 +581,11 @@ async function testErrorHistoryAndWarningPayload() {
 
   clearAllSrcCache();
   global.window = global;
-  global.eagle = makeFailingEagleMock();
+  const { eagle } = makeFailingItemsEagleMock(3);
+  global.eagle = eagle;
   const preprocess = require("./preprocess");
   preprocess.preprocess = async () => {
-    throw new Error("ENOENT mock: broken.png.undefined");
+    throw new Error("ENOENT mock: file is gone");
   };
 
   const autoTagger = require("./auto-tagger");
@@ -609,38 +598,33 @@ async function testErrorHistoryAndWarningPayload() {
     onWarning: (w) => warnings.push(w),
   });
 
-  // 1回目: 履歴に1件記録される
-  await autoTagger._tickForTest();
-  let hist = autoTagger.getState().errorHistory;
-  ok(hist.length === 1, "errorHistory has 1 entry after first failure");
-  ok(hist[0].fileName === "broken.png", "history entry records fileName");
-  ok(hist[0].message === "ENOENT mock: broken.png.undefined", "history entry records message");
-  ok(typeof hist[0].at === "number", "history entry records timestamp");
+  // 5 tick で BAD1×2（再試行上限）→ BAD2×2 → BAD3×1（閾値到達）となる
+  for (let i = 0; i < 5; i++) await autoTagger._tickForTest();
 
-  // 2回目: 履歴が蓄積する
-  await autoTagger._tickForTest();
-  ok(autoTagger.getState().errorHistory.length === 2, "errorHistory grows to 2");
-
-  // 3回目: 閾値到達で停止
-  await autoTagger._tickForTest();
   const state = autoTagger.getState();
   ok(state.running === false, "auto-stopped at threshold");
-  ok(state.errorHistory.length === 3, "errorHistory has 3 entries at stop");
+  const hist = state.errorHistory;
+  ok(hist.length === 5, "errorHistory has 5 entries (2+2+1, retry cap respected)");
+  ok(hist[0].fileName === "bad1.png", "history entry records fileName of first failure");
+  ok(hist[2].fileName === "bad2.png", "history moves on to next item after retry cap");
+  ok(hist[4].fileName === "bad3.png", "history records the final distinct failure");
+  ok(typeof hist[0].at === "number", "history entry records timestamp");
+  ok(hist[0].message === "ENOENT mock: file is gone", "history entry records message");
 
   // 警告は正確に1回（tick の onWarning のみ。stop() 由来の再発火なし）
   ok(warnings.length === 1, "warning emitted exactly once (no double warning)");
   const w = warnings[0];
   ok(w.reason === "max_consecutive_errors", "warning reason is max_consecutive_errors");
-  ok(w.lastError === "ENOENT mock: broken.png.undefined", "warning payload includes lastError");
-  ok(w.consecutiveErrors === 3, "warning payload includes consecutiveErrors");
-  ok(Array.isArray(w.errorHistory) && w.errorHistory.length === 3, "warning payload includes errorHistory");
+  ok(w.lastError === "ENOENT mock: file is gone", "warning payload includes lastError");
+  ok(w.consecutiveErrors === 3, "warning payload includes consecutiveErrors (distinct items)");
+  ok(Array.isArray(w.errorHistory) && w.errorHistory.length === 5, "warning payload includes errorHistory");
   ok(w.errorHistory !== state.errorHistory, "warning errorHistory is a copy, not the internal array");
 
   autoTagger.stop();
 }
 
 async function testErrorHistoryCappedAndStartResets() {
-  section("auto-tagger — error history capped at 10 + reset on start (Phase 10.2)");
+  section("auto-tagger — error history capped at 10 + reset on start (Phase 10.2 / 10.6)");
   clearAllSrcCache();
   global.localStorage = makeLocalStorage();
 
@@ -653,7 +637,8 @@ async function testErrorHistoryCappedAndStartResets() {
 
   clearAllSrcCache();
   global.window = global;
-  global.eagle = makeFailingEagleMock();
+  const { eagle } = makeFailingItemsEagleMock(20);
+  global.eagle = eagle;
   const preprocess = require("./preprocess");
   let n = 0;
   preprocess.preprocess = async () => {
@@ -665,6 +650,7 @@ async function testErrorHistoryCappedAndStartResets() {
   autoTagger._resetForTest();
   autoTagger.start({ settings, onProgress: () => {}, onWarning: () => {} });
 
+  // 12 tick = BAD1〜BAD6 が各2回（再試行上限）失敗
   for (let i = 0; i < 12; i++) await autoTagger._tickForTest();
 
   const hist = autoTagger.getState().errorHistory;
@@ -672,6 +658,7 @@ async function testErrorHistoryCappedAndStartResets() {
   ok(hist[0].message === "fail-3", "oldest entries evicted (fail-1/2 dropped)");
   ok(hist[9].message === "fail-12", "newest entry retained");
   ok(autoTagger.getState().lastError === "fail-12", "lastError is the most recent");
+  ok(autoTagger.getState().consecutiveErrors === 6, "consecutiveErrors counts distinct items only (6)");
   ok(autoTagger.getState().running === true, "still running (threshold 50 not reached)");
 
   // 再起動で履歴・エラー状態がリセットされる
@@ -681,6 +668,166 @@ async function testErrorHistoryCappedAndStartResets() {
   ok(fresh.errorHistory.length === 0, "errorHistory reset on start()");
   ok(fresh.lastError === null, "lastError reset on start()");
   ok(fresh.consecutiveErrors === 0, "consecutiveErrors reset on start()");
+
+  // スキップ記録もリセット: 再起動後の tick で BAD1 が再挑戦される（Phase 10.6）
+  await autoTagger._tickForTest();
+  const afterRestart = autoTagger.getState();
+  ok(afterRestart.errorHistory.length === 1, "capped item is retried after restart (skip memory cleared)");
+  ok(afterRestart.errorHistory[0].fileName === "bad1.png", "retried item is the queue head BAD1");
+
+  autoTagger.stop();
+}
+
+// Phase 10.6: 壊れたファイル1個で自動モードが停止しない（SPEC §15.11・2026-08-31 実事故の回帰防止）
+async function testSameBrokenItemDoesNotStopAutoMode() {
+  section("auto-tagger — single broken item does NOT stop auto mode (Phase 10.6)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const settings = {
+    threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+    useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+    autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+  };
+
+  clearAllSrcCache();
+  global.window = global;
+  const { eagle } = makeFailingItemsEagleMock(1);
+  global.eagle = eagle;
+  const preprocess = require("./preprocess");
+  preprocess.preprocess = async () => {
+    throw new Error("画像のデコードに失敗しました（Jimp: ENOENT / DOM: ENOENT）");
+  };
+
+  const autoTagger = require("./auto-tagger");
+  autoTagger._resetForTest();
+
+  const warnings = [];
+  autoTagger.start({
+    settings,
+    onProgress: () => {},
+    onWarning: (w) => warnings.push(w),
+  });
+
+  // 実事故と同じ条件: 同一ファイルが毎 tick 先頭に来ても停止しない
+  // （旧挙動なら 5 tick で maxConsecutiveErrors 到達 → 自動停止）
+  for (let i = 0; i < 7; i++) await autoTagger._tickForTest();
+
+  const st = autoTagger.getState();
+  ok(st.running === true, "auto mode keeps running despite the broken item");
+  ok(st.consecutiveErrors === 1, "consecutiveErrors counts the distinct broken item once");
+  ok(st.errorHistory.length === 2, "broken item attempted exactly MAX_ITEM_ATTEMPTS (2) times");
+  ok(warnings.length === 0, "no auto-stop warning");
+
+  // 再起動（start）でスキップ記録はリセットされ、再挑戦される
+  autoTagger.stop();
+  autoTagger.start({ settings, onProgress: () => {}, onWarning: (w) => warnings.push(w) });
+  await autoTagger._tickForTest();
+  ok(autoTagger.getState().errorHistory.length === 1, "item is retried after restart");
+  ok(autoTagger.getState().running === true, "still running after restart tick");
+
+  autoTagger.stop();
+}
+
+// Phase 10.6: 壊れたアイテムをスキップして次の正常アイテムを処理する
+async function testBrokenItemSkippedThenNextItemProcessed() {
+  section("auto-tagger — broken item skipped, next good item processed (Phase 10.6)");
+  clearAllSrcCache();
+  global.localStorage = makeLocalStorage();
+
+  const ts = Date.now();
+  const goodItem = {
+    id: "GOOD1",
+    name: "good1.png",
+    filePath: "/tmp/good1.png",
+    tags: [],
+    importedAt: ts, // BAD1 より古い → キューでは後ろ
+    _saved: false,
+    async save() { this._saved = true; return true; },
+  };
+  const eagle = {
+    item: {
+      getSelected: async () => [],
+      get: async (opts) => {
+        // getItemById (fields なし)
+        if (opts && Array.isArray(opts.ids) && !opts.fields) {
+          return opts.ids.map((id) =>
+            id === "GOOD1"
+              ? goodItem
+              : {
+                  id,
+                  name: id.toLowerCase() + ".png",
+                  filePath: "/tmp/" + id + ".png",
+                  tags: [],
+                  importedAt: ts + 100,
+                  async save() {},
+                }
+          );
+        }
+        // getUntagged → lightweight fields
+        if (opts && opts.isUntagged) {
+          return [
+            { id: "BAD1", importedAt: ts + 100 }, // 新しい壊れたファイル
+            { id: "GOOD1", importedAt: ts },      // 古い正常ファイル
+          ];
+        }
+        return [];
+      },
+      getIdsWithModifiedAt: async () => [],
+      count: async () => 2,
+    },
+  };
+
+  const settings = {
+    threshold: 0.5, maxTags: 30, mergeStrategy: "append", blacklist: [],
+    useServer: false, serverUrl: "", serverTimeoutMs: 10000, fallbackOnError: true,
+    autoMode: { enabled: true, pollIntervalSec: 45, maxConsecutiveErrors: 5 },
+  };
+
+  clearAllSrcCache();
+  global.window = global;
+  global.eagle = eagle;
+  const preprocess = require("./preprocess");
+  // BAD1 だけデコード失敗（実ファイル欠損の再現）、GOOD1 は正常処理
+  preprocess.preprocess = async (filePath) => {
+    if (String(filePath).toLowerCase().includes("bad1")) {
+      throw new Error("画像のデコードに失敗しました（Jimp: ENOENT / DOM: ENOENT）");
+    }
+    return { pixel_values: new Float32Array(602112), padding_mask: new Uint8Array(200704) };
+  };
+  const inference = require("./inference");
+  inference.infer = async () => new Float32Array(19294).fill(0.9);
+  const tags = require("./tags");
+  tags.probsToTags = () => ["tag"];
+
+  const autoTagger = require("./auto-tagger");
+  autoTagger._resetForTest();
+
+  const events = [];
+  const warnings = [];
+  autoTagger.start({
+    settings,
+    onProgress: (ev) => events.push(ev),
+    onWarning: (w) => warnings.push(w),
+  });
+
+  // t1: BAD1 失敗 / t2: BAD1 再試行で上限到達 / t3: GOOD1 を処理
+  await autoTagger._tickForTest();
+  await autoTagger._tickForTest();
+  await autoTagger._tickForTest();
+
+  const doneEv = events.find((e) => e.status === "done");
+  ok(doneEv != null, "good item reached done event");
+  ok(doneEv && doneEv.fileName === "good1.png", "done event is for good1.png");
+  ok(goodItem._saved === true, "good item saved with tags");
+  ok(Array.isArray(goodItem.tags) && goodItem.tags.includes("tag"), "predicted tag merged into good item");
+
+  const st = autoTagger.getState();
+  ok(st.processedUntaggedCount === 1, "processedUntaggedCount === 1");
+  ok(st.consecutiveErrors === 0, "consecutiveErrors reset by the success");
+  ok(st.running === true, "auto mode never stopped");
+  ok(warnings.length === 0, "no auto-stop warning");
+
   autoTagger.stop();
 }
 
@@ -1024,6 +1171,9 @@ async function testTickSkipsVideoInNewItems() {
     await testConsecutiveErrorsAutoStop();
     await testErrorHistoryAndWarningPayload();
     await testErrorHistoryCappedAndStartResets();
+    // Phase 10.6: 壊れたアイテムのスキップ
+    await testSameBrokenItemDoesNotStopAutoMode();
+    await testBrokenItemSkippedThenNextItemProcessed();
     await testPauseAndResumeForManualRun();
     await testManualRunPausesAutoTagger();
     testIndexHtmlHasAutoModeSection();

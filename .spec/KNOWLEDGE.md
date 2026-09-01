@@ -462,3 +462,27 @@ Phase 10.1 の実機調査で、連続エラー自動停止時の UI メッセ�
 
 - `phase3-test.js` に `testRunSkipsVideo` 追加（mp4 混在時のスキップ検証、7 assertions）
 - 既存 Phase 10.5 テスト（`phase10-test.js`）は `isNonImageExt` の再エクスポート経由でも全て PASS を確認
+
+## Phase 10.6 — 壊れたアイテムのスキップ（2026-09-02）
+
+### 背景
+
+- 実機（2026-08-31）: 「メタデータ上は未タグ付けだが実ファイルが ENOENT」のアイテム（`LYABD92XYRFWG.info`）が `importedAt` 降順キューの先頭を毎 tick 占拠し、30秒 × 5回で `maxConsecutiveErrors` 到達 → 自動停止
+- Phase 10.5（動画フィルタ）と同型の「キュー先頭ブロッキング」。拡張子では判別できない欠損（削除・リネーム・Eagle 側の名前不一致）が対象
+
+### 設計（SPEC §15.11）
+
+- **アイテム別再試行上限**: `MAX_ITEM_ATTEMPTS = 2`（定数）。`state.itemFailCounts`（Map）に失敗回数を記録し、超過アイテムは Step D のキュー構築で除外。`start()` でリセット（再 ON で再挑戦）
+- **連続エラーは distinct アイテム単位**: 同一アイテムの再試行では `consecutiveErrors` を増やさず、`lastFailedItemId` と異なる id が失敗した時のみ加算。「5個の別ファイルが連続失敗＝モデル破損等のシステム異常」という安全網の意味論を温存
+- 手動モード（`main.run`）は影響なし（選択範囲を順次処理、エラーは progress 表示のみ）
+
+### テスト移行の教訓
+
+- 既存3テスト（連続エラー停止・履歴・キャップ）は「同一 BAD1 を毎 tick 再試行して毎回カウント」する旧挙動をエンコードしていたため、`makeFailingItemsEagleMock(n)`（n 個の distinct 失敗アイテム）へ移行。挙動変更時はテストがエンコードする前提を洗い出す
+- テストモックの filePath を id（大文字 `BAD1`）から組み立てると `includes("bad1")` がマッチせずデコード失敗モックが効かない事故。大文字小文字を `.toLowerCase()` で正規化
+
+### ADR候補: 自動モードの連続エラーを「異なるアイテムの連続失敗」に再定義し、同一アイテムは2回で打ち切りスキップする
+
+### その他
+
+- code-simplifier サブエージェントは今度もモデル不在（`ProviderModelNotFoundError: Model not found: opus/`）で即座に失敗。タイムアウトではなくモデル設定の問題。代替として Sisyphus 直接 diff レビューを実施（高/中 0件・低1件は現状維持推奨）
