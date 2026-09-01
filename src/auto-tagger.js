@@ -36,6 +36,12 @@ const NEW_ITEM_CAP = 50;
 // 保持するエラー履歴の上限（リングバッファ。SPEC §15.10）
 const ERROR_HISTORY_CAP = 10;
 
+// Phase 10.6: 同一アイテムの再試行上限（セッション内。SPEC §15.11）。
+// 実ファイル欠損（ENOENT）等の壊れたアイテムが importedAt 降順キューの先頭を
+// 毎 tick 占拠し、maxConsecutiveErrors 到達で自動停止する事故（2026-08-31）の対策。
+// 超過したアイテムはキュー構築時に除外し、start() で記録をリセットする。
+const MAX_ITEM_ATTEMPTS = 2;
+
 // Phase 10.5: 動画等の非画像を除外するヘルパは file-types.js に切り出した
 // （2026-08-12: 手動モード main.js run との共有のため）。
 // 後方互換のため isNonImageExt を再エクスポート（phase10-test.js がここから取得する）。
@@ -56,6 +62,9 @@ function createFreshState() {
     lastScanAt: null,
     lastError: null,
     errorHistory: [],
+    // Phase 10.6: アイテム別の失敗回数（id → 回数）と直近失敗アイテム
+    itemFailCounts: new Map(),
+    lastFailedItemId: null,
     onProgress: null,
     onWarning: null,
     settings: null,
@@ -183,16 +192,25 @@ async function tick() {
     }
 
     // Step D: 結合（新規優先・id で重複除外）。workQueue は ID のみ保持。
+    // Phase 10.6: 再試行上限超過のアイテムは除外する（SPEC §15.11）。
     const seen = new Set();
     const workQueue = [];
     for (const id of newItemIds) {
-      if (id && !seen.has(id)) {
+      if (
+        id &&
+        !seen.has(id) &&
+        (state.itemFailCounts.get(id) || 0) < MAX_ITEM_ATTEMPTS
+      ) {
         seen.add(id);
         workQueue.push({ id, isNew: true });
       }
     }
     for (const id of untaggedIds) {
-      if (id && !seen.has(id)) {
+      if (
+        id &&
+        !seen.has(id) &&
+        (state.itemFailCounts.get(id) || 0) < MAX_ITEM_ATTEMPTS
+      ) {
         seen.add(id);
         workQueue.push({ id, isNew: false });
       }
@@ -232,6 +250,7 @@ async function tick() {
       const result = await processOneItem(item, settings);
       state.consecutiveErrors = 0;
       state.lastError = null;
+      state.lastFailedItemId = null;
       if (isNew) state.processedNewCount++;
       else state.processedUntaggedCount++;
       if (typeof state.onProgress === "function") {
@@ -243,7 +262,15 @@ async function tick() {
         });
       }
     } catch (err) {
-      state.consecutiveErrors++;
+      // Phase 10.6: アイテム別の失敗を記録し、上限超過アイテムは次 tick から
+      // キュー除外する（SPEC §15.11）。
+      const prevFails = state.itemFailCounts.get(id) || 0;
+      state.itemFailCounts.set(id, prevFails + 1);
+      // 同一アイテムの再試行は連続エラーに数えない（SPEC §15.11）。
+      // 壊れた1個のファイルが毎 tick 先頭に来ても自動停止しない。
+      // 別のアイテムが続けて失敗する場合のみ、システム異常のシグナルとして加算する。
+      if (id !== state.lastFailedItemId) state.consecutiveErrors++;
+      state.lastFailedItemId = id;
       state.lastError = err.message;
       // エラー履歴をリングバッファに記録（停止時の原因診断用・SPEC §15.10）
       state.errorHistory.push({
@@ -321,6 +348,9 @@ function start(options) {
   state.lastScanAt = loadLastScanAt() ?? Date.now();
   state.lastError = null;
   state.errorHistory = [];
+  // Phase 10.6: アイテム別失敗記録もリセット（再 ON で全アイテムに再挑戦できる）
+  state.itemFailCounts = new Map();
+  state.lastFailedItemId = null;
   state.timer = setInterval(() => {
     // setInterval は async 関数の完了を待たないので、
     // tick 内部の inTick ガードで再入を防ぐ

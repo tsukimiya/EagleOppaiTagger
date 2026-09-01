@@ -352,6 +352,25 @@
 
 ---
 
+## Phase 10.6: 壊れたアイテムが自動モードを停止させる問題の修正
+
+> 背景: 実機（2026-08-31）で「メタデータ上は未タグ付けだが実ファイルが ENOENT」のアイテムが
+> `importedAt` 降順キューの先頭を毎 tick 占拠し、30秒 × 5回で `maxConsecutiveErrors` 到達 → 自動停止。
+> Phase 10.5（動画フィルタ）と同型の「キュー先頭ブロッキング」。SPEC §15.11 参照。
+> 方針: (1) アイテム別再試行上限 `MAX_ITEM_ATTEMPTS = 2`（超過でキュー除外・`start()` でリセット）
+> (2) `consecutiveErrors` は「異なるアイテム」の連続失敗でのみ増加（同一アイテムの再試行では不変）。
+
+- [x] `src/auto-tagger.js`: `MAX_ITEM_ATTEMPTS` 定数 + `itemFailCounts` / `lastFailedItemId` を state に追加
+- [x] `src/auto-tagger.js`: Step D のキュー構築で再試行上限超過アイテムを除外
+- [x] `src/auto-tagger.js`: catch でアイテム別失敗を記録し、異なるアイテム失敗時のみ `consecutiveErrors++`。成功時にリセット
+- [x] `src/phase10-test.js`: 同一壊れたアイテムでは停止しない（スキップ後アイドル継続）テスト
+- [x] `src/phase10-test.js`: 壊れたアイテムをスキップして次の正常アイテムを処理するテスト
+- [x] `src/phase10-test.js`: 既存の連続エラーテスト3件を「異なるアイテム」モックに移行（旧挙動＝同一アイテム再試行をエンコードしているため）
+- [x] **DoD**: `npm test` 全 PASS（回帰なし・phase10: 144 / phase3: 28 / phase2系: 57 / phase8-9: 29 / webp: 19）・`npm run check` OK
+- [ ] **DoD**: 実機でファイル欠損アイテムがあっても自動モードが停止せず、他の画像のタグ付けが継続される（※ユーザー検証）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約
