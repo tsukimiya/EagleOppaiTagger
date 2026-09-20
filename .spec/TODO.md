@@ -371,6 +371,20 @@
 
 ---
 
+## Phase 10.7: SVG のタグ付け対象外フィルタ
+
+> 背景: 実機（2026-09-21）で SVG アイテムが「Jimp: Could not find MIME for Buffer <null> /
+> DOM: The source image could not be decoded」で失敗。Phase 10.5 の動画ブロックリストは素通りし、
+> ENOENT 4件との壊れアイテムクラスタで distinct 連続エラー 5 到達 → 自動停止。
+> SVG はベクター形式でラスターモデルでは原理的に処理不可能なため、恒久的に除外する。SPEC §15.12 参照。
+
+- [x] `src/file-types.js`: `NON_IMAGE_EXTS` に `svg` を追加（自動・手動両モードでキュー除外）
+- [x] `src/phase10-test.js`: `testIsNonImageExt` に svg / SVG（大文字）ケースを追加
+- [x] **DoD**: `npm test` 全 PASS（回帰なし）・`npm run check` OK
+- [ ] **DoD**: 実機で SVG アイテムがスキップされ自動モードが停止しない（※ユーザー検証）
+
+---
+
 ## 完了後の仕上げ（全 Phase 共通）
 
 - [ ] `KNOWLEDGE.md` に全 Phase の学びを集約
