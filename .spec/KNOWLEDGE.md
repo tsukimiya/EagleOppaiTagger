@@ -486,3 +486,20 @@ Phase 10.1 の実機調査で、連続エラー自動停止時の UI メッセ�
 ### その他
 
 - code-simplifier サブエージェントは今度もモデル不在（`ProviderModelNotFoundError: Model not found: opus/`）で即座に失敗。タイムアウトではなくモデル設定の問題。代替として Sisyphus 直接 diff レビューを実施（高/中 0件・低1件は現状維持推奨）
+
+## Phase 10.7 — SVG のタグ付け対象外フィルタ（2026-09-21）
+
+### 背景
+
+- 実機（2026-09-21）: SVG アイテムが「Jimp: Could not find MIME for Buffer <null> / DOM: The source image could not be decoded」で失敗。Jimp は SVG（テキストファイル＝マジックバイト無し）の MIME スニッフに失敗し、DOM（`createImageBitmap`）も内在サイズの無い SVG をデコードできない
+- Phase 10.5 の動画ブロックリストは素通り。Phase 10.6 の distinct カウントの下で ENOENT 4件 + SVG 1件の壊れアイテムクラスタ（importedAt 降順キュー先頭）が閾値 5 に到達 → 自動停止
+
+### 設計（SPEC §15.12）
+
+- `NON_IMAGE_EXTS` に `svg` を追加しただけ（Phase 10.5 と同じ機構で自動・手動両モードから除外）
+- **Phase 10.6 の機構は設計どおり動作していた**: ログ上、各壊れアイテムは正確に 2 回失敗して打ち切り、停止は「5 個の異なる壊れアイテム」によるもの。単一アイテム対策ではクラスタを防げないという限界の確認
+- ENOENT アイテムはプラグイン側で修復不能 → 対象外。ライブラリ側の除去（ユーザー作業）と安全網（`maxConsecutiveErrors`）で対処。キュー構築時の fs 存在チェックは NAS 上の全未タグ付けアイテムに毎 tick stat を叩くことになるため不採用
+
+### その他
+
+- 8/31 障害の `LYABD92XYRFWG`（`@mumunyan …朝まで….jpg`）が 3 週間経っても同一パスで残存。実ファイル欠損アイテムは自然治癒しないので、ユーザーによる Eagle 側の除去が必須

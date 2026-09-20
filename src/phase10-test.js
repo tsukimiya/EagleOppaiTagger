@@ -978,6 +978,10 @@ function testIsNonImageExt() {
   ok(isNonImageExt("MP4") === true, "MP4 (uppercase) is non-image");
   ok(isNonImageExt("WebM") === true, "WebM (mixed case) is non-image");
 
+  // 非ラスタ形式（Phase 10.7: SVG は Jimp の MIME スニッフも DOM デコードも失敗する）
+  ok(isNonImageExt("svg") === true, "svg is non-image");
+  ok(isNonImageExt("SVG") === true, "SVG (uppercase) is non-image");
+
   // 画像拡張子（処理対象）
   ok(isNonImageExt("png") === false, "png is image");
   ok(isNonImageExt("jpg") === false, "jpg is image");
